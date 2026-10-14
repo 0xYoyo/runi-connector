@@ -46,8 +46,11 @@ export async function harvestSyllabi(
 ): Promise<HarvestReport> {
   const report: HarvestReport = { coursesChecked: 0, syllabiFetched: 0, alreadyCached: 0, failures: [] };
 
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 400)); // be gentle with Reichman's servers
+
   for (const course of courses) {
     report.coursesChecked++;
+    if (report.coursesChecked > 1) await pause();
     try {
       let sectionIds = await sectionIdsForCourse(kv, course.id);
       if (sectionIds.length === 0) {

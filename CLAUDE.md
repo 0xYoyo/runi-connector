@@ -28,8 +28,14 @@ Unofficial remote MCP server (Cloudflare Worker) that lets Reichman University s
 - Tools are read-only. Don't add tools that submit, post, or change anything in Moodle without Yoyo explicitly asking.
 - The product is unofficial: never use Reichman logos/branding or imply affiliation.
 
+## Local version (the one that works today)
+
+- `local/login.ts` (`npm run login`) signs in once and saves only the Moodle token to `~/.runi-connector/session.json` (mode 600); syllabi cache in `~/.runi-connector/cache.json`.
+- `local/server.ts` (`npm run mcp`) is a stdio MCP server reusing `src/tools.ts`. Never write to stdout there; it's the MCP channel.
+- Hosted Worker is blocked: Reichman's Moodle sits behind Reblaze bot protection, which returns an HTTP 247 JS challenge to Cloudflare egress. Do not try to evade it (no headless-browser challenge solving, proxies or UA spoofing). Hosted access waits on official permission from Reichman IT.
+
 ## Notes
 
 - `MOODLE_BASE` is per academic year (`https://moodle.runi.ac.il/2027`); update every October.
-- Real-login behavior (2FA, token lifetime, exact IdP pages) is not yet verified; `npm run probe` output is the source of truth.
+- Real login verified 2026-10-14: Moodle launch.php → auth.runi.ac.il SAML IdP → my.runi.ac.il F5 my.policy login → back; no 2FA. Token lifetime not yet measured.
 - Commit as `0xYoyo <113042560+0xYoyo@users.noreply.github.com>`; GitHub rejects pushes that expose the private email.

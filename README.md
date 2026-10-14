@@ -42,7 +42,39 @@ You may have to sign in again when the Moodle token expires. How long that takes
 
 > Your Reichman password is the same one used for email and other university systems. This tool is built to never keep it, but it is unofficial: use it only on your own account, and only if you're comfortable with that.
 
+## Run it locally (personal use)
+
+Reichman's bot protection blocks Moodle API calls from cloud servers, so the hosted version doesn't work today. The local version runs on your own computer, with your own account, through Moodle's official mobile-app API.
+
+```sh
+npm install
+npm run login      # once; asks for your username + password, saves only the Moodle token
+```
+
+Your token and the syllabus cache live in `~/.runi-connector/` (owner-only files). Delete that folder to sign out. Run `npm run login` again if Moodle says your access expired.
+
+**Claude Code** (any project, any terminal):
+
+```sh
+claude mcp add --scope user reichman -- "$PWD/node_modules/.bin/tsx" "$PWD/local/server.ts"
+```
+
+**Claude Desktop:** add this to `~/Library/Application Support/Claude/claude_desktop_config.json` (replace the path), then restart the app:
+
+```json
+{
+  "mcpServers": {
+    "reichman": {
+      "command": "/Users/YOU/repos/runi-connector/node_modules/.bin/tsx",
+      "args": ["/Users/YOU/repos/runi-connector/local/server.ts"]
+    }
+  }
+}
+```
+
 ## Deploy your own (Cloudflare Workers)
+
+> Currently blocked: Reichman's Moodle challenges requests from Cloudflare's servers (Reblaze bot protection). Kept for when official access is granted.
 
 ```sh
 npm install

@@ -4,7 +4,7 @@ export class MoodleSessionExpired extends Error {
   readonly name = "MoodleSessionExpired";
   constructor() {
     super(
-      "Your Reichman Moodle access has expired. Disconnect and reconnect the connector to sign in again.",
+      "Your Reichman Moodle access has expired. Sign in again: run `npm run login` (local version), or reconnect the connector.",
     );
   }
 }

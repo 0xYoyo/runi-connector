@@ -7,7 +7,9 @@
     "deploy": "wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
-    "probe": "tsx scripts/probe-login.ts"
+    "probe": "tsx scripts/probe-login.ts",
+    "login": "tsx local/login.ts",
+    "mcp": "tsx local/server.ts"
   },
   "license": "MIT",
   "dependencies": {
