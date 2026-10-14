@@ -1,19 +1,28 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "runi-connector",
-  "main": "src/index.ts",
-  "compatibility_date": "2025-09-01",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
-  "observability": { "enabled": true },
-  "vars": {
-    // Change to your own workers.dev URL or custom domain after the first deploy.
-    "PUBLIC_URL": "https://runi-connector.YOUR-SUBDOMAIN.workers.dev",
-    // Reichman runs one Moodle per academic year; update this each October.
-    "MOODLE_BASE": "https://moodle.runi.ac.il/2027"
-  },
-  "kv_namespaces": [
-    // Create with: npx wrangler kv namespace create OAUTH_KV  (and CACHE_KV), then paste the ids.
-    { "binding": "OAUTH_KV", "id": "REPLACE_WITH_OAUTH_KV_ID" },
-    { "binding": "CACHE_KV", "id": "REPLACE_WITH_CACHE_KV_ID" }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "runi-connector",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-09-01",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		// Optional: set PUBLIC_URL only if you serve it from a custom domain; otherwise the request origin is used.
+		// Reichman runs one Moodle per academic year; update this each October.
+		"MOODLE_BASE": "https://moodle.runi.ac.il/2027"
+	},
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "d85dc1cb1f6043298d7227b67e89c8ca"
+		},
+		{
+			"binding": "CACHE_KV",
+			"id": "6f63e4610eb84f2abfcec53c3532ce47"
+		}
+	]
 }

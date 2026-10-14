@@ -14,7 +14,7 @@ export interface Env {
   OAUTH_KV: KVNamespace;
   CACHE_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
-  PUBLIC_URL: string; // e.g. https://runi-connector.yourname.workers.dev
+  PUBLIC_URL?: string; // optional override (custom domain); defaults to the request origin
   MOODLE_BASE: string; // e.g. https://moodle.runi.ac.il/2027
   SYLLABUS_URL?: string; // syllabus PDF URL prefix, SectionIDC is appended
 }
@@ -188,7 +188,7 @@ const defaultHandler = {
         throw error;
       }
     }
-    if (url.pathname === "/") return landingPage(env.PUBLIC_URL);
+    if (url.pathname === "/") return landingPage(env.PUBLIC_URL || url.origin);
     return new Response("Not found", { status: 404 });
   },
 };
@@ -198,6 +198,7 @@ let provider: OAuthProvider<Env> | undefined;
 
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const publicUrl = env.PUBLIC_URL || new URL(request.url).origin;
     provider ??= new OAuthProvider<Env>({
       apiRoute: "/mcp",
       apiHandler: mcpHandler as never,
@@ -208,8 +209,8 @@ export default {
       clientIdMetadataDocumentEnabled: true,
       scopesSupported: [SCOPE, "offline_access"],
       resourceMetadata: {
-        resource: `${env.PUBLIC_URL}/mcp`,
-        authorization_servers: [env.PUBLIC_URL],
+        resource: `${publicUrl}/mcp`,
+        authorization_servers: [publicUrl],
         resource_name: "Reichman courses (unofficial)",
       },
       accessTokenTTL: 60 * 60, // 1 hour; apps refresh silently
