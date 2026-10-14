@@ -1,0 +1,16 @@
+// Local end-to-end test config: points the Worker at the fake Reichman on 127.0.0.1:8799.
+{
+  "name": "runi-connector-e2e",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "PUBLIC_URL": "http://localhost:8787",
+    "MOODLE_BASE": "http://127.0.0.1:8799/moodle",
+    "SYLLABUS_URL": "http://127.0.0.1:8799/myruni/syllabigenerator/pdf/renderdocument?SectionIDC="
+  },
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "e2e-oauth" },
+    { "binding": "CACHE_KV", "id": "e2e-cache" }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "name": "runi-connector",
+  "version": "0.1.0",
+  "description": "Unofficial MCP connector that lets Reichman University students ask Claude, ChatGPT, Codex or Gemini about their own Moodle courses and syllabi.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "probe": "tsx scripts/probe-login.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.3",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "unpdf": "^1.8.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261014.1",
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4",
+    "wrangler": "^4.151.0"
+  },
+  "private": true
+}
