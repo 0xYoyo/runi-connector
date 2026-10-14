@@ -52,8 +52,19 @@ export class MoodleClient {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
     });
+    const raw = await response.text();
+    let data: T & { exception?: string; errorcode?: string; message?: string };
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      // Not JSON: a login redirect, maintenance page or firewall block. Say which, so it can be fixed.
+      const finalUrl = new URL(response.url || this.baseUrl);
+      const title = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim().slice(0, 100) ?? "";
+      const detail = `HTTP ${response.status}, ${finalUrl.host}${finalUrl.pathname}${response.redirected ? " (after redirect)" : ""}, title "${title}"`;
+      console.warn("moodle non-json response", wsfunction, detail, raw.slice(0, 300).replace(/\s+/g, " "));
+      throw new MoodleError(`Moodle sent a web page instead of data (${detail}).`);
+    }
     if (!response.ok) throw new MoodleError(`Moodle returned HTTP ${response.status}`);
-    const data = (await response.json()) as T & { exception?: string; errorcode?: string; message?: string };
     if (data && typeof data === "object" && "exception" in data && data.exception) {
       if (data.errorcode === "invalidtoken" || data.errorcode === "accessexception") {
         throw new MoodleSessionExpired();
