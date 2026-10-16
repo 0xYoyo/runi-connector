@@ -33,6 +33,19 @@ async function readJson(req: IncomingMessage): Promise<any> {
 }
 
 const DEFAULT_PORT = 51547;
+const APP_ID = "reichman-courses-connector";
+
+// Is the server on this port one of ours (another connector process)?
+async function isOurs(port: number): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`http://127.0.0.1:${port}/__runi`, { signal: controller.signal }).finally(() => clearTimeout(timer));
+    return ((await res.json()) as { app?: string }).app === APP_ID;
+  } catch {
+    return false;
+  }
+}
 
 // The nonce is shared by every connector process on this computer (Claude Desktop may start
 // several), so the link in an already-open tab keeps working whichever process serves it.
@@ -68,10 +81,13 @@ export class SetupServer {
     const creds = loadCredentials();
     return {
       nonce: this.nonce,
-      reichmanConnected: Boolean(creds.reichman),
+      reichmanConnected: Boolean(creds.reichman && !creds.reichmanRejected),
       reichmanName: null,
-      piazzaConnected: Boolean(creds.piazza),
+      piazzaConnected: Boolean(creds.piazza && !creds.piazzaRejected),
+      reichmanNotice: creds.reichmanRejected ? "Reichman stopped accepting your saved password. If you changed it, sign in with the new one." : "",
+      piazzaNotice: creds.piazzaRejected ? "Piazza stopped accepting your saved password. Sign in again, or skip." : "",
       suggestedUsername: creds.reichman?.username ?? "",
+      piazzaEmail: creds.piazza?.email ?? "",
       storageName: storageName(),
     };
   }
@@ -82,12 +98,29 @@ export class SetupServer {
     if (this.nonce) return this.url();
     this.nonce = sharedNonce();
     const wanted = process.env.RUNI_SETUP_PORT !== undefined ? Number(process.env.RUNI_SETUP_PORT) : DEFAULT_PORT;
-    const listening = await this.listen(wanted);
-    if (!listening) {
+    if (await this.listen(wanted)) return this.url();
+    if (await isOurs(wanted)) {
+      // Another connector process serves the page; take over if it exits.
       this.port = wanted;
       this.retry = setInterval(() => void this.listen(wanted).then((ok) => ok && clearInterval(this.retry)), 2000);
       this.retry.unref();
+    } else {
+      // Some other app uses that port: serve on any free port instead.
+      await this.listen(0);
     }
+    return this.url();
+  }
+
+  /** Makes sure someone serves the page right now (taking over if the old owner exited). */
+  async ensureServing(): Promise<string> {
+    await this.start();
+    if (this.server || (await isOurs(this.port))) return this.url();
+    if (await this.listen(this.port)) {
+      clearInterval(this.retry);
+      return this.url();
+    }
+    clearInterval(this.retry);
+    await this.listen(0);
     return this.url();
   }
 
@@ -134,6 +167,8 @@ export class SetupServer {
   private async handle(req: IncomingMessage, res: ServerResponse) {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
+    if (req.method === "GET" && url.pathname === "/__runi") return this.send(res, 200, JSON.stringify({ app: APP_ID }));
+
     if (req.method === "GET" && url.pathname === "/") {
       // The page only renders for someone who opened the real link (carries the nonce).
       if (url.searchParams.get("k") !== this.nonce)
@@ -169,7 +204,7 @@ export class SetupServer {
     const result = await this.handlers.verifyReichman(username, password);
     if (result.ok) {
       const creds = loadCredentials();
-      saveCredentials({ ...creds, reichman: { username, password } });
+      saveCredentials({ ...creds, reichman: { username, password }, reichmanRejected: false });
       this.handlers.onChange();
     }
     this.send(res, 200, JSON.stringify(result));
@@ -182,7 +217,7 @@ export class SetupServer {
     const result = await this.handlers.verifyPiazza(email, password);
     if (result.ok) {
       const creds = loadCredentials();
-      saveCredentials({ ...creds, piazza: { email, password } });
+      saveCredentials({ ...creds, piazza: { email, password }, piazzaRejected: false });
       this.handlers.onChange();
     }
     this.send(res, 200, JSON.stringify(result));
@@ -211,6 +246,7 @@ export function openOnce(url: string, windowMs = 5 * 60_000): boolean {
 
 // Opens a URL in the user's default browser, cross-platform, without shell quoting.
 export function openInBrowser(url: string) {
+  if (process.env.RUNI_NO_BROWSER) return; // tests
   const [cmd, args] =
     platform() === "darwin"
       ? ["open", [url]]

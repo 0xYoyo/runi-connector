@@ -17,6 +17,11 @@ import { join } from "node:path";
 export interface StoredCredentials {
   reichman?: { username: string; password: string };
   piazza?: { email: string; password: string };
+  // Set when the service rejected the saved password (e.g. the user changed it). While set we
+  // never try that password again (repeated failures can lock the account) and ask the user
+  // to sign in again. Cleared when they save a new one.
+  reichmanRejected?: boolean;
+  piazzaRejected?: boolean;
 }
 
 const SERVICE = "runi-connector";

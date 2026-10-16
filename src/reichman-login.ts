@@ -99,9 +99,16 @@ export async function navigateThroughLogin(
 ): Promise<Page> {
   let page = await browser.request(startUrl);
   let passwordHost: string | null = null; // host we sent the password to, once we have
+  const visited: string[] = []; // host+path of each page (no query strings: they can hold tokens)
+  const route = () => visited.slice(-6).join(" → ");
 
   for (let step = 0; step < maxSteps; step++) {
     if (page.customSchemeRedirect || isDone(page)) return page;
+    const here = new URL(page.url);
+    visited.push(here.host + here.pathname);
+    if (visited.filter((v) => v === visited[visited.length - 1]).length > 3) {
+      throw new LoginError("unexpected_page", `The login went in circles (${route()}).`, Boolean(passwordHost));
+    }
 
     const html = page.text();
     const forms = parseForms(html, page.url);
@@ -156,7 +163,7 @@ export async function navigateThroughLogin(
       Boolean(passwordHost),
     );
   }
-  throw new LoginError("unexpected_page", "The login flow took too many steps.", Boolean(passwordHost));
+  throw new LoginError("unexpected_page", `The login flow took too many steps (${route()}).`, Boolean(passwordHost));
 }
 
 export function parseMobileTokenRedirect(location: string): string {

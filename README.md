@@ -54,6 +54,16 @@ Plus `connect_account` (open the sign-in page) and `forget_my_data` (delete your
 
 Courses can be named in Hebrew or English, by course number (`77`), or by Moodle id.
 
+## What happens when…
+
+- **You install it the first time:** the sign-in page opens once in your browser. Reichman first (checked live), then Piazza (optional; skip it and add it any time).
+- **You install a new version, reinstall, or restart Claude:** nothing to do. Your login is still in your computer's secure storage, so it signs in by itself in the background. No page opens.
+- **The Moodle session or token expires:** it signs in again by itself with your saved login. You don't notice.
+- **You change your Reichman (or Piazza) password:** the next request fails once. The connector marks the saved password as outdated and **never tries it again** (repeated wrong attempts can lock your account). Then the sign-in page opens, and Claude shows you the link. Enter the new password; everything works again without a restart.
+- **You want to add Piazza later, or switch accounts:** ask Claude to *"connect my Reichman account"*. It opens the page and shows the link.
+- **A new version comes out:** it downloads in the background and is used the next time Claude starts the connector. No re-download, no clicks.
+- **You want everything gone:** ask Claude to *"forget my Reichman data"* (deletes the saved logins and cached course data), then remove the extension. Removing the extension alone doesn't delete the saved login.
+
 ## How sign-in works, and what happens to your password
 
 Reichman doesn't offer outside apps a "Sign in with Reichman" button, and students can't generate a Moodle API token themselves. So the connector completes the normal university login for you, on your own computer.
@@ -67,17 +77,21 @@ Reichman doesn't offer outside apps a "Sign in with Reichman" button, and studen
 
 ## Releasing a new version
 
-One-time setup: create an npm account (turn on 2FA), make an **automation** access token, and add it to the GitHub repo as the `NPM_TOKEN` Actions secret.
+Set up once (see "First publish" below). After that, a release is:
 
-Then, for each release:
+1. Bump `"version"` in `package.json` **and** `extension/manifest.json` (the build refuses to run if they differ).
+2. Commit and push to `main`.
 
-```sh
-npm version patch   # or minor / major — bumps package.json + creates the git tag
-# set the same version in extension/manifest.json (the build refuses to run if they differ), commit
-git push --follow-tags
-```
+GitHub Actions (`.github/workflows/release.yml`) sees the new version, runs the tests, creates GitHub Release `v<version>` with the `.mcpb` attached, and publishes the npm package. No tags and no tokens: it uses npm's *trusted publishing* (GitHub's identity). Every installed connector updates itself.
 
-The workflow runs the tests, builds `reichman-courses.mcpb`, attaches it to a GitHub Release, and publishes the npm package. Every installed connector (Claude Desktop and npx) picks the new version up on its own; nobody re-downloads anything.
+### First publish (one time)
+
+npm only lets you link a package to GitHub after it exists, so the very first version goes up by hand:
+
+1. Create an account at https://www.npmjs.com/signup and turn on two-factor authentication (avatar → Account → Two-Factor Authentication).
+2. In Terminal: `npm login` (a browser window opens; approve it).
+3. `npm publish ~/repos/runi-connector/dist/reichman-courses-connector-<version>.tgz --access public`
+4. On https://www.npmjs.com/package/reichman-courses-connector/access → **Trusted Publisher** → **GitHub Actions**: user `0xYoyo`, repository `runi-connector`, workflow `release.yml`, environment empty. Save.
 
 ## Deploy your own (Cloudflare Workers)
 

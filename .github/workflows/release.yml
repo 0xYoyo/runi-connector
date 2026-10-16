@@ -1,34 +1,52 @@
+# Releases happen when the version in package.json changes on main. No tags, no tokens:
+#   1. bump "version" in package.json AND extension/manifest.json (the build checks they match)
+#   2. push to main
+# This workflow then tests, builds the .mcpb, creates GitHub Release v<version> with it attached,
+# and publishes the npm package using npm "trusted publishing" (GitHub's OIDC identity; set up
+# once on npmjs.com → package → Settings → Trusted Publisher, workflow file: release.yml).
+# Every installed connector picks the new npm version up on its own.
 name: Release
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
 permissions:
-  contents: write
+  contents: write # create the GitHub Release
+  id-token: write # npm trusted publishing
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build:ext
-      # Attach the one-click installer to the GitHub Release (what students download).
-      - name: Publish GitHub Release
+      - name: Is this a new version?
+        id: check
+        run: |
+          LOCAL=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view reichman-courses-connector version 2>/dev/null || echo none)
+          echo "local=$LOCAL published=$PUBLISHED"
+          echo "version=$LOCAL" >> "$GITHUB_OUTPUT"
+          if [ "$LOCAL" != "$PUBLISHED" ]; then echo "release=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.check.outputs.release == 'true'
+        run: npm install -g npm@latest # trusted publishing needs npm 11.5.1+
+      - if: steps.check.outputs.release == 'true'
+        run: npm ci
+      - if: steps.check.outputs.release == 'true'
+        run: npm run typecheck
+      - if: steps.check.outputs.release == 'true'
+        run: npm run test:ext && npm test
+      - if: steps.check.outputs.release == 'true'
+        name: GitHub Release with the installer attached
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.check.outputs.version }}
           files: dist/reichman-courses.mcpb
           generate_release_notes: true
-      # Also publish the npm package (for Codex / Claude Code via npx) when NPM_TOKEN is set.
-      - name: Publish to npm
-        if: ${{ env.NPM_TOKEN != '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public || echo "npm publish skipped/failed (non-fatal)"
+      - if: steps.check.outputs.release == 'true'
+        name: Publish to npm (trusted publishing, no token)
+        # Provenance is only possible from a public repository.
+        run: npm publish --access public ${{ github.event.repository.private && '--provenance=false' || '--provenance' }}

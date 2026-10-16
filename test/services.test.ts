@@ -57,8 +57,33 @@ describe("Student Info Station", () => {
   it("signs in through its own gateway, then reads grades", async () => {
     const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
     const michlol = new MichlolClient(browser, base, () => VALID_USER);
-    const grades = await michlol.grades();
-    expect(grades.map((g) => g.grade)).toEqual(["95", "טרם"]);
+    const { data: grades, selection } = await michlol.grades();
+    expect(grades.map((g) => `${g.course}|${g.component}|${g.sitting}|${g.grade}`)).toEqual([
+      "77 אלגוריתמים|שיעור|1|95",
+      "77 אלגוריתמים|תרגול|1|88",
+      "52 חשבון אינפיניטיסמלי א'|שיעור|2|81",
+      "109 מבוא להסתברות|שיעור|1|טרם",
+    ]);
+    expect(selection.years).toEqual(["2027", "2026"]);
+  });
+
+  it("timetable uses the page's current semester and is grouped by day, without the ID number", async () => {
+    const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
+    const michlol = new MichlolClient(browser, base, () => VALID_USER);
+    const { data, selection } = await michlol.weeklySchedule();
+    expect(selection.semester).toBe("1");
+    expect(data).toContain("יום שני:\n  - 109-מבוא להסתברות");
+    expect(data).toContain("יום שלישי:\n  - 3030-תכנות מתקדם");
+    expect(data).not.toContain("המשך");
+    expect(data).not.toContain("123456789");
+  });
+
+  it("exam schedule uses the exam screen's own submit and labels each column", async () => {
+    const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
+    const michlol = new MichlolClient(browser, base, () => VALID_USER);
+    const { data } = await michlol.examSchedule();
+    expect(data).toContain("- מועד: 1; קוד קורס: 77; שם קורס: אלגוריתמים; תאריך: 25/01/2027");
+    expect(data).toContain("מועד: 2");
   });
 
   it("signs in again once when the session was logged out", async () => {
@@ -68,8 +93,8 @@ describe("Student Info Station", () => {
     // Simulate the session expiring on the server side: drop the Michlol cookies.
     const expired = new Browser();
     (michlol as any).browser = expired;
-    const grades = await michlol.grades();
-    expect(grades).toHaveLength(2);
+    const { data: grades } = await michlol.grades();
+    expect(grades).toHaveLength(4);
   });
 
   it("fails clearly without a saved login", async () => {
@@ -79,11 +104,18 @@ describe("Student Info Station", () => {
 });
 
 describe("Panopto", () => {
-  it("follows the Moodle hand-off and finds recordings", async () => {
+  it("signs in via IDCPROD (warming up the My RUNI gateway on 'access not found') and finds recordings", async () => {
     const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
-    const panopto = new PanoptoClient(browser, 2027, base, () => VALID_USER);
+    const michlol = new MichlolClient(browser, base, () => VALID_USER);
+    const panopto = new PanoptoClient(browser, 2027, base, () => VALID_USER, () => michlol.ensureSignedIn());
     const results = await panopto.search("probability");
     expect(results[0]?.deliveryId).toBe("rec-5");
+  });
+
+  it("without the gateway fallback, a dead end is a clear error, not a hang", async () => {
+    const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
+    const panopto = new PanoptoClient(browser, 2027, base, () => VALID_USER);
+    await expect(panopto.search("x")).rejects.toThrow(/unexpected page|circles/);
   });
 });
 

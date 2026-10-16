@@ -1,6 +1,6 @@
 {
   "name": "reichman-courses-connector",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Unofficial MCP connector that lets Reichman University students ask Claude, ChatGPT, Codex or Gemini about their own Moodle courses and syllabi.",
   "scripts": {
     "dev": "wrangler dev",
@@ -15,6 +15,10 @@
     "prepublishOnly": "npm run build:ext"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xYoyo/runi-connector.git"
+  },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.32.1",

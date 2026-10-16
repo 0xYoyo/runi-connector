@@ -32,10 +32,64 @@ export const MENU = {
 } as const;
 
 export interface GradeRow {
-  course: string;
-  component: string; // lecture / recitation / final exam
-  grade: string; // may be "טרם" (not yet) or a number
-  credits: string;
+  course: string; // "77 אלגוריתמים"
+  component: string; // שיעור / תרגול / בוחן …
+  sitting: string; // מועד: "1", "2"
+  grade: string; // a number, "טרם" (not yet), "פטור" (exempt)…
+}
+
+export interface QuerySelection {
+  year: string; // label as shown, e.g. 2027 - תשפ"ז
+  semester: string;
+  years: string[]; // values the page offers
+}
+
+export interface MichlolResult<T> {
+  data: T;
+  selection: QuerySelection;
+}
+
+// How each query screen is submitted (read off the live site's own submit, 2026-10-16).
+const QUERIES = {
+  grades: { menu: 13, prgname: "StudentQueryExecution", args: "TZ,Token,QueryCode,R1C1,R1C2" },
+  weeklySchedule: { menu: 16, prgname: "StudentQueryExecution", args: "TZ,Token,QueryCode,R1C1,R1C2" },
+  exams: { menu: 6, prgname: "HADPASAT_TOCHNIT_BEHINOT", args: "TZ,Token,R1C1,R1C2,R1C3" },
+} as const;
+
+type YearArg = number | "all" | undefined;
+
+interface QueryForm {
+  fields: Record<string, string>; // hidden inputs + each select's default
+  options: Record<string, Array<{ value: string; label: string }>>;
+}
+
+function readQueryForm(html: string): QueryForm {
+  const doc = parse(html);
+  const fields: Record<string, string> = {};
+  const options: QueryForm["options"] = {};
+  for (const input of doc.querySelectorAll("input[type=hidden]")) {
+    const name = input.getAttribute("name");
+    if (name) fields[name] = input.getAttribute("value") ?? "";
+  }
+  for (const select of doc.querySelectorAll("select")) {
+    const name = select.getAttribute("name");
+    if (!name) continue;
+    const opts = select.querySelectorAll("option").map((o) => ({ value: o.getAttribute("value") ?? "", label: o.text.trim(), selected: o.hasAttribute("selected") }));
+    const real = opts.filter((o) => o.value !== "" && !/בחירת/.test(o.value));
+    options[name] = real.map(({ value, label }) => ({ value, label }));
+    fields[name] = (opts.find((o) => o.selected) ?? real[0])?.value ?? "";
+  }
+  return { fields, options };
+}
+
+// Removes the student's ID number (תעודת זהות) from text we hand to the model; it isn't needed.
+export function stripId(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !/^\s*מ\.ז\b/.test(line))
+    .join("\n")
+    .replace(/\b\d{9}\b/g, "")
+    .replace(/[ \t]+\n/g, "\n");
 }
 
 // Pages Michlol / My RUNI show when the session is gone ("logged out", "something went wrong",
@@ -57,6 +111,11 @@ export class MichlolClient {
 
   // Michlol sits behind My RUNI's own gateway, which can ask for the Reichman login again even
   // when Moodle is signed in. Walk that login (Reichman pages only) until Michlol itself loads.
+  /** Signs in to the Student Info Station (and with it the My RUNI gateway). */
+  ensureSignedIn(): Promise<void> {
+    return this.ensureAuth();
+  }
+
   private async ensureAuth() {
     if (this.authed) return;
     const creds = this.credentials?.();
@@ -99,72 +158,56 @@ export class MichlolClient {
     }
   }
 
-  // Reads the hidden query-form fields from a query page.
-  private queryFields(html: string): { TZ: string; Token: string; QueryCode: string } {
-    const doc = parse(html);
-    const val = (name: string) => doc.querySelector(`input[name=${name}]`)?.getAttribute("value") ?? "";
-    return { TZ: val("TZ"), Token: val("Token"), QueryCode: val("QueryCode") };
-  }
-
-  grades(year: number | "all" = "all", semester = 0): Promise<GradeRow[]> {
-    return this.withSession(() => this.gradesOnce(year, semester));
-  }
-
-  private async gradesOnce(year: number | "all", semester: number): Promise<GradeRow[]> {
-    const page = await this.openMenu(MENU.grades);
-    const { TZ, Token, QueryCode } = this.queryFields(page.text());
-    if (!Token) throw new Error("Couldn't open the grades screen.");
-    const body = new URLSearchParams({
-      PRGNAME: "StudentQueryExecution",
-      ARGUMENTS: "TZ,Token,QueryCode,R1C1,R1C2",
-      TZ,
-      Token,
-      QueryCode,
-      R1C1: year === "all" ? "-1" : String(year),
-      R1C2: String(semester),
-    });
+  // Opens a query screen, fills in the year/semester (the page's own defaults unless given),
+  // and returns the result page.
+  private async runQuery(kind: keyof typeof QUERIES, year: YearArg, semester: number | undefined) {
+    const q = QUERIES[kind];
+    const page = await this.openMenu(q.menu);
+    const form = readQueryForm(page.text());
+    if (!form.fields.Token) throw new MichlolSessionLost("The query screen didn't load.");
+    const pick = (name: string, wanted: string | undefined) =>
+      wanted !== undefined && form.options[name]?.some((o) => o.value === wanted) ? wanted : form.fields[name];
+    const values: Record<string, string> = { ...form.fields };
+    values.R1C1 = pick("R1C1", year === "all" ? "-1" : year === undefined ? undefined : String(year));
+    values.R1C2 = pick("R1C2", semester === undefined ? undefined : String(semester));
+    if (kind === "exams") values.R1C3 = form.fields.Terms ?? "0";
+    const body = new URLSearchParams({ ...values, PRGNAME: q.prgname, ARGUMENTS: q.args });
     const result = await this.browser.request(this.endpoint, { method: "POST", body, referer: this.endpoint });
     this.checkSession(result);
-    return parseGradeCards(result.text());
+    const label = (name: string, value: string) => form.options[name]?.find((o) => o.value === value)?.label ?? value;
+    const selection: QuerySelection = {
+      year: label("R1C1", values.R1C1),
+      semester: label("R1C2", values.R1C2),
+      years: (form.options.R1C1 ?? []).map((o) => o.value).filter((v) => v !== "-1"),
+    };
+    return { html: result.text(), selection };
   }
 
-  // Opens a Michlol page by menu id and returns its readable text. If the page is a
-  // year/semester query screen, it runs the query for the chosen year first. Robust for pages
-  // whose exact layout we don't parse field-by-field (schedule, exams): the model reads the text.
-  pageText(menuId: number, year: number | "all" = "all", semester = 0): Promise<string> {
-    return this.withSession(() => this.pageTextOnce(menuId, year, semester));
+  /** Official grades; defaults to all years. */
+  grades(year: YearArg = "all", semester?: number): Promise<MichlolResult<GradeRow[]>> {
+    return this.withSession(async () => {
+      const { html, selection } = await this.runQuery("grades", year, year === "all" && semester === undefined ? 0 : semester);
+      return { data: parseGradeCards(html), selection };
+    });
   }
 
-  private async pageTextOnce(menuId: number, year: number | "all", semester: number): Promise<string> {
-    const page = await this.openMenu(menuId);
-    let html = page.text();
-    const { TZ, Token, QueryCode } = this.queryFields(html);
-    const hasQueryForm = Boolean(Token) && /R1C1/.test(html) && /בחירת שנה|select year/i.test(html);
-    if (hasQueryForm) {
-      const body = new URLSearchParams({
-        PRGNAME: "StudentQueryExecution",
-        ARGUMENTS: "TZ,Token,QueryCode,R1C1,R1C2",
-        TZ,
-        Token,
-        QueryCode,
-        R1C1: year === "all" ? "-1" : String(year),
-        R1C2: String(semester),
-      });
-      const result = await this.browser.request(this.endpoint, { method: "POST", body, referer: this.endpoint });
-      this.checkSession(result);
-      html = result.text();
-    }
-    return michlolText(html);
+  /** Weekly timetable, one line per class, grouped by day. Defaults to the current semester. */
+  weeklySchedule(year?: YearArg, semester?: number): Promise<MichlolResult<string>> {
+    return this.withSession(async () => {
+      const { html, selection } = await this.runQuery("weeklySchedule", year, semester);
+      return { data: parseWeeklyGrid(html) ?? stripId(michlolText(html)), selection };
+    });
   }
 
-  examSchedule(year: number | "all" = "all", semester = 0) {
-    return this.pageText(MENU.exams, year, semester);
-  }
-  weeklySchedule(year: number | "all" = "all", semester = 0) {
-    return this.pageText(MENU.scheduleBoard, year, semester);
+  /** Exam schedule (all sittings). Defaults to the current semester. */
+  examSchedule(year?: YearArg, semester?: number): Promise<MichlolResult<string>> {
+    return this.withSession(async () => {
+      const { html, selection } = await this.runQuery("exams", year, semester);
+      return { data: parseTableGrid(html) ?? stripId(michlolText(html)), selection };
+    });
   }
 
-  // Opens the contact-admin page and returns the recipient and topic options plus the form token,
+  // Opens the contact-admin page and returns the recipient options plus the form token,
   // so the tool layer can show the user exactly what will be sent before confirming.
   async contactAdminForm(): Promise<{ recipients: string[]; token: string }> {
     const page = await this.withSession(() => this.openMenu(MENU.contactAdmin));
@@ -176,6 +219,60 @@ export class MichlolClient {
     const token = doc.querySelector("input[name=Token]")?.getAttribute("value") ?? "";
     return { recipients, token };
   }
+}
+
+const clean = (t: string) => t.replace(/\s+/g, " ").trim();
+
+// Michlol lays tables out as Bootstrap rows of .col cells inside .MasterTable .Table.
+function gridRows(html: string): string[][] | null {
+  const doc = parse(html);
+  const box = doc.querySelector(".MasterTable .Table") ?? doc.querySelector(".Table");
+  if (!box) return null;
+  const rows = box.childNodes
+    .filter((n): n is HTMLElement => n instanceof Object && "classList" in n && (n as HTMLElement).classList.contains("row"))
+    .map((row) => row.childNodes.filter((c): c is HTMLElement => "classList" in c && /\bcol/.test((c as HTMLElement).getAttribute("class") ?? "")));
+  return rows.length > 1 ? rows.map((cells) => cells.map((c) => c.text)) : null;
+}
+
+// Weekly timetable grid: first row = days, first column = times. Skips "המשך" (continued) cells.
+export function parseWeeklyGrid(html: string): string | null {
+  const rows = gridRows(html);
+  if (!rows || !rows[0].some((h) => /יום/.test(h))) return null;
+  const days = rows[0].map(clean);
+  const byDay = new Map<string, string[]>();
+  for (const row of rows.slice(1)) {
+    row.forEach((cell, i) => {
+      if (i === 0 || !days[i]) return;
+      for (const entry of cell.split(/\n\s*\n|\n(?=\s*\d{2,5}-)/).map(clean)) {
+        if (!entry || /^המשך/.test(entry)) continue;
+        if (!byDay.has(days[i])) byDay.set(days[i], []);
+        if (!byDay.get(days[i])!.includes(entry)) byDay.get(days[i])!.push(entry);
+      }
+    });
+  }
+  if (byDay.size === 0) return "No classes in this timetable.";
+  return days
+    .filter((d) => byDay.has(d))
+    .map((d) => `${d}:\n${byDay.get(d)!.map((e) => `  - ${e}`).join("\n")}`)
+    .join("\n");
+}
+
+// Generic table grid: first row = headers; each later row becomes "header: value; …".
+export function parseTableGrid(html: string): string | null {
+  const rows = gridRows(html);
+  if (!rows) return null;
+  const headers = rows[0].map(clean);
+  const lines = rows
+    .slice(1)
+    .map((row) =>
+      row
+        .map((cell, i) => [headers[i], clean(cell)] as const)
+        .filter(([h, v]) => v && h)
+        .map(([h, v]) => `${h}: ${v}`)
+        .join("; "),
+    )
+    .filter(Boolean);
+  return lines.length ? lines.map((l) => `- ${l}`).join("\n") : "Nothing listed for this selection.";
 }
 
 // Strips a Michlol page to readable text: drops nav/menu/scripts, keeps the main content.
@@ -191,18 +288,22 @@ export function michlolText(html: string): string {
     .trim();
 }
 
+// Grade cards (.Box_ph). Live layout: .InRange[0] = "77 אלגוריתמים", [1] = "נקודות זכות … / מועד 1",
+// [2] = component (שיעור, תרגול…); a <strong> holds "ציון: 95".
 export function parseGradeCards(html: string): GradeRow[] {
   const doc = parse(html);
   const rows: GradeRow[] = [];
   for (const card of doc.querySelectorAll(".Box_ph")) {
-    const course = card.querySelector("h2.pagetitle")?.text.trim() ?? "";
+    const ranges = card.querySelectorAll(".InRange").map((e: HTMLElement) => clean(e.text));
+    const course = clean(card.querySelector("h2.pagetitle")?.text ?? "") || ranges[0] || "";
     if (!course) continue;
-    const ranges = card.querySelectorAll(".InRange").map((e: HTMLElement) => e.text.trim());
-    const gradeLine = card.querySelectorAll("strong").map((e) => e.text.trim()).find((t) => t.includes("ציון"));
+    const meta = ranges.find((r) => /מועד|נקודות/.test(r)) ?? "";
+    const component = ranges.find((r, i) => i > 0 && r !== meta && r !== course) ?? "";
+    const gradeLine = card.querySelectorAll("strong").map((e) => clean(e.text)).find((t) => t.includes("ציון"));
     rows.push({
       course,
-      component: ranges[1] ?? "",
-      credits: ranges[0] ?? "",
+      component,
+      sitting: meta.match(/מועד\s*(\d+)/)?.[1] ?? "",
       grade: gradeLine ? gradeLine.replace(/^ציון:\s*/, "") : "",
     });
   }

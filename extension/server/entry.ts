@@ -21,9 +21,9 @@ import { PanoptoClient, srtToText } from "../../src/panopto";
 import { PiazzaAuthError, PiazzaClient } from "../../src/piazza";
 import { LoginError, signInToMoodle, type Credentials } from "../../src/reichman-login";
 import { DEFAULT_SYLLABUS_URL, harvestSyllabi } from "../../src/syllabi";
-import { buildServer, type MichlolLike, type PanoptoLike, type PiazzaLike, type UserProps } from "../../src/tools";
+import { buildServer, NotConnectedError, type MichlolLike, type PanoptoLike, type PiazzaLike, type UserProps } from "../../src/tools";
 import { moodleBaseCandidates } from "./entry-year";
-import { clearCredentials, dataDir, loadCredentials } from "./credentials";
+import { clearCredentials, dataDir, loadCredentials, saveCredentials } from "./credentials";
 import { openInBrowser, openOnce, SetupServer } from "./setup-server";
 import { downloadLatest, markHealthy, markStarting, pickDownloadedVersion, runningVersion } from "./updates";
 
@@ -99,15 +99,65 @@ async function main() {
   const cache = fileCache();
   const ref: { session: Session | null } = { session: null };
 
-  // Reichman sign-in, used both to connect at startup and to verify creds from the setup page.
-  async function connectReichman(): Promise<UserProps> {
-    const creds = loadCredentials().reichman;
-    if (!creds) throw new Error("No Reichman account saved. Open the connector's sign-in page first.");
-    ref.session = await signIn(creds);
-    log(`signed in as ${ref.session!.props.fullName} (${ref.session!.props.moodleBase})`);
-    return ref.session!.props;
+  // The sign-in page (started below, before any tool can run).
+  let setup!: SetupServer;
+  const signInLink = () => setup.url();
+
+  // A tool needs the user to sign in: open the page (at most once in a while) and say so, with
+  // the link, so Claude can show it even if the browser didn't come to the front.
+  function needSignIn(reason: string, openWindowMs = 5 * 60_000): NotConnectedError {
+    openOnce(signInLink(), openWindowMs);
+    return new NotConnectedError(
+      `${reason} The sign-in page should have opened in the browser. Show the user this link as a clickable link in case it didn't: ${signInLink()}`,
+    );
   }
 
+  // Marks a saved password as rejected, but only if it's still the one we tried (another
+  // connector process may have saved a new one in the meantime).
+  function markRejected(service: "reichman" | "piazza", tried: { password: string }) {
+    const creds = loadCredentials();
+    if (creds[service]?.password !== tried.password) return;
+    saveCredentials({ ...creds, [service === "reichman" ? "reichmanRejected" : "piazzaRejected"]: true });
+    log(`${service} rejected the saved password; waiting for the user to sign in again`);
+  }
+
+  const REICHMAN_REJECTED =
+    "Reichman stopped accepting the saved password (it was probably changed). To avoid locking the account, the connector won't retry it until the user signs in again.";
+
+  // Turns a Reichman login failure into what the user should see; marks a wrong password.
+  function reichmanFailure(error: unknown, tried: Credentials): Error {
+    if (error instanceof LoginError && error.code === "bad_credentials") {
+      markRejected("reichman", tried);
+      return needSignIn(REICHMAN_REJECTED, 6 * 3600_000);
+    }
+    if (error instanceof LoginError && error.code === "mfa_required") {
+      return new Error("Reichman asked for a second verification step, which the connector can't do yet.");
+    }
+    return new Error(`Couldn't reach Reichman right now (${(error as Error).message}). Check the internet connection and try again.`);
+  }
+
+  // Signs in with the saved login. One sign-in at a time: concurrent callers share it.
+  let signingIn: Promise<UserProps> | null = null;
+  function connectReichman(): Promise<UserProps> {
+    signingIn ??= (async () => {
+      const creds = loadCredentials();
+      if (!creds.reichman) throw needSignIn("No Reichman account is connected yet.");
+      if (creds.reichmanRejected) throw needSignIn(REICHMAN_REJECTED, 6 * 3600_000);
+      try {
+        ref.session = await signIn(creds.reichman);
+      } catch (error) {
+        throw reichmanFailure(error, creds.reichman);
+      }
+      log(`signed in as ${ref.session!.props.fullName} (${ref.session!.props.moodleBase})`);
+      return ref.session!.props;
+    })().finally(() => (signingIn = null));
+    return signingIn;
+  }
+
+  // Reuses the current session if there is one (or one being made), else signs in.
+  const ensureReichman = (): Promise<UserProps> => (ref.session ? Promise.resolve(ref.session.props) : connectReichman());
+
+  const piazzaHost = process.env.PIAZZA_HOST || undefined;
   const moodleYear = () => Number(ref.session?.props.moodleBase.match(/\/(\d{4})$/)?.[1] ?? new Date().getFullYear());
   const panoptoHost = process.env.PANOPTO_HOST || undefined;
   const michlolHost = process.env.MICHLOL_HOST || undefined;
@@ -116,58 +166,96 @@ async function main() {
     return ref.session.browser;
   };
 
-  const reichmanCreds = () => loadCredentials().reichman;
+  const reichmanCreds = () => {
+    const creds = loadCredentials();
+    return creds.reichmanRejected ? undefined : creds.reichman;
+  };
 
   // One Panopto / Michlol client per signed-in session, so each signs in once, not per call.
   const clients = new WeakMap<Browser, { panopto: PanoptoClient; michlol: MichlolClient }>();
-  const clientsFor = () => {
+  const clientsFor = async () => {
+    await ensureReichman();
     const browser = needBrowser();
     let c = clients.get(browser);
     if (!c) {
+      const michlolClient = new MichlolClient(browser, michlolHost, reichmanCreds);
       c = {
-        panopto: new PanoptoClient(browser, moodleYear(), panoptoHost, reichmanCreds),
-        michlol: new MichlolClient(browser, michlolHost, reichmanCreds),
+        panopto: new PanoptoClient(browser, moodleYear(), panoptoHost, reichmanCreds, () => michlolClient.ensureSignedIn()),
+        michlol: michlolClient,
       };
       clients.set(browser, c);
     }
     return c;
   };
 
+  // Panopto and Michlol sign in through the My RUNI gateway with the saved login; if that says
+  // the password is wrong, handle it like a failed Reichman sign-in.
+  async function viaGateway<T>(run: (c: { panopto: PanoptoClient; michlol: MichlolClient }) => Promise<T>): Promise<T> {
+    const c = await clientsFor();
+    const tried = reichmanCreds();
+    try {
+      return await run(c);
+    } catch (error) {
+      if (error instanceof LoginError && tried) throw reichmanFailure(error, tried);
+      throw error;
+    }
+  }
+
   const panopto: PanoptoLike = {
-    search: (q, n) => clientsFor().panopto.search(q, n),
-    transcript: (id) => clientsFor().panopto.transcript(id),
-    viewerLink: (id, at) => clientsFor().panopto.viewerLink(id, at),
+    search: (q, n) => viaGateway((c) => c.panopto.search(q, n)),
+    transcript: (id) => viaGateway((c) => c.panopto.transcript(id)),
+    viewerLink: (id, at) => new PanoptoClient(new Browser(), 0, panoptoHost).viewerLink(id, at),
   };
   const michlol: MichlolLike = {
-    grades: (year, sem) => clientsFor().michlol.grades(year, sem),
-    examSchedule: (year, sem) => clientsFor().michlol.examSchedule(year, sem),
-    weeklySchedule: (year, sem) => clientsFor().michlol.weeklySchedule(year, sem),
+    grades: (year, sem) => viaGateway((c) => c.michlol.grades(year, sem)),
+    examSchedule: (year, sem) => viaGateway((c) => c.michlol.examSchedule(year, sem)),
+    weeklySchedule: (year, sem) => viaGateway((c) => c.michlol.weeklySchedule(year, sem)),
   };
-  const piazzaHost = process.env.PIAZZA_HOST || undefined;
 
   let piazzaClient: PiazzaClient | undefined;
+  const PIAZZA_REJECTED = "Piazza stopped accepting the saved password (it was probably changed). The connector won't retry it until the user signs in to Piazza again.";
   async function piazzaReady(): Promise<PiazzaClient> {
-    const creds = loadCredentials().piazza;
-    if (!creds) throw new PiazzaAuthError("Piazza isn't set up.");
+    const creds = loadCredentials();
+    if (!creds.piazza) throw needSignIn("Piazza isn't connected yet (it has its own login).");
+    if (creds.piazzaRejected) throw needSignIn(PIAZZA_REJECTED, 6 * 3600_000);
     if (!piazzaClient) {
-      piazzaClient = new PiazzaClient(new Browser(), piazzaHost);
-      await piazzaClient.login(creds.email, creds.password);
+      const client = new PiazzaClient(new Browser(), piazzaHost);
+      try {
+        await client.login(creds.piazza.email, creds.piazza.password);
+      } catch (error) {
+        if (error instanceof PiazzaAuthError) {
+          markRejected("piazza", creds.piazza);
+          throw needSignIn(PIAZZA_REJECTED, 6 * 3600_000);
+        }
+        throw new Error(`Couldn't reach Piazza right now (${(error as Error).message}). Try again in a moment.`);
+      }
+      piazzaClient = client;
     }
     return piazzaClient;
+  }
+  // A Piazza call that fails because the session ended: sign in again once.
+  async function withPiazza<T>(run: (p: PiazzaClient) => Promise<T>): Promise<T> {
+    try {
+      return await run(await piazzaReady());
+    } catch (error) {
+      if (!(error instanceof PiazzaAuthError)) throw error;
+      piazzaClient = undefined;
+      return run(await piazzaReady());
+    }
   }
   const piazza: PiazzaLike = {
     get configured() {
       return Boolean(loadCredentials().piazza);
     },
-    classes: async () => (await piazzaReady()).classes(),
-    findClass: async (q) => (await piazzaReady()).findClass(q),
-    search: async (id, q) => (await piazzaReady()).search(id, q),
-    post: async (id, n) => (await piazzaReady()).post(id, n),
+    classes: () => withPiazza((p) => p.classes()),
+    findClass: (q) => withPiazza((p) => p.findClass(q)),
+    search: (id, q) => withPiazza((p) => p.search(id, q)),
+    post: (id, n) => withPiazza((p) => p.post(id, n)),
   };
 
   const fetchSyllabus = async (course: MoodleCourse) => {
     const attempt = () =>
-      harvestSyllabi(cache, needBrowser(), ref.session!.props.moodleBase, [course], loadCredentials().reichman!, process.env.SYLLABUS_URL || DEFAULT_SYLLABUS_URL);
+      harvestSyllabi(cache, needBrowser(), ref.session!.props.moodleBase, [course], reichmanCreds() ?? { username: "", password: "" }, process.env.SYLLABUS_URL || DEFAULT_SYLLABUS_URL);
     let report = await attempt();
     if (report.failures.length > 0) {
       await connectReichman();
@@ -177,7 +265,7 @@ async function main() {
   };
 
   // Local sign-in page: verifies each login against the real service before saving it.
-  const setup = new SetupServer({
+  setup = new SetupServer({
     verifyReichman: async (username, password) => {
       try {
         ref.session = await signIn({ username, password });
@@ -210,20 +298,11 @@ async function main() {
       piazzaClient = undefined; // force re-login with new creds next time
     },
   });
-  const setupUrl = await setup.start();
+  await setup.start();
 
-  if (loadCredentials().reichman) {
-    try {
-      await connectReichman();
-    } catch (error) {
-      log("startup sign-in failed:", (error as Error).message);
-    }
-  } else {
-    if (openOnce(setupUrl)) log("no account saved; opened the sign-in page");
-  }
-
-  const server = buildServer(ref.session ? ref.session!.props : null, cache, {
+  const server = buildServer(null, cache, {
     onSessionExpired: connectReichman,
+    ensureConnected: ensureReichman,
     fetchSyllabus,
     panopto,
     michlol,
@@ -241,9 +320,18 @@ async function main() {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async () => {
-      await setup.start();
-      openInBrowser(setup.url());
-      return { content: [{ type: "text" as const, text: `Opened the sign-in page in your browser. If it didn't open, go to: ${setup.url()}\nSign in there, then come back and ask again.` }] };
+      const url = await setup.ensureServing();
+      openInBrowser(url);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              `The sign-in page is opening in the user's browser. Also show them this link as a clickable link, in case the browser didn't come to the front: ${url}\n` +
+              `There they can connect or change their Reichman login and add or update Piazza. Once they're done, tools work right away (no restart).`,
+          },
+        ],
+      };
     },
   );
 
@@ -266,9 +354,18 @@ async function main() {
     },
   );
 
+  // Answer Claude right away; sign in in the background (tools wait for it if they need it).
   await server.connect(new StdioServerTransport());
   const version = runningVersion();
   log(`ready (v${version})`);
+  const saved = loadCredentials();
+  if (!saved.reichman) {
+    if (openOnce(setup.url())) log("no account saved; opened the sign-in page");
+  } else if (saved.reichmanRejected) {
+    if (openOnce(setup.url(), 6 * 3600_000)) log("saved Reichman password was rejected earlier; opened the sign-in page");
+  } else {
+    connectReichman().catch((error) => log("background sign-in:", (error as Error).message));
+  }
   if (process.env.RUNI_LAUNCHED === version) markHealthy(dataDir(), version);
 
   // Fetch the next version in the background; it's used the next time the connector starts.

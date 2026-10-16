@@ -2,7 +2,7 @@
 // same Browser that signed in to Moodle. Read-only: list/search recordings and read captions.
 
 import type { Browser } from "./browser";
-import { navigateThroughLogin, type Credentials } from "./reichman-login";
+import { LoginError, navigateThroughLogin, type Credentials } from "./reichman-login";
 
 export const PANOPTO_HOST = "https://runi.cloud.panopto.eu";
 
@@ -40,26 +40,40 @@ export class PanoptoClient {
     private readonly moodleYear: number,
     private readonly host: string = PANOPTO_HOST,
     private readonly credentials?: () => Credentials | undefined,
+    // Signs in to the My RUNI gateway; used if Panopto's sign-in hits "access not found" first.
+    private readonly gatewaySignIn?: () => Promise<void>,
   ) {}
 
-  // Panopto signs in through Moodle: its login page hands off to Moodle, which posts back to
-  // Panopto (via auto-submitting forms and script redirects a plain HTTP client won't follow on
-  // its own). Walk that until we're back on a Panopto page that isn't the login page. If Moodle
-  // or My RUNI asks for the Reichman password on the way, it's typed only into Reichman pages.
+  // Panopto signs in through the My RUNI gateway (SAML): its login page redirects there, and the
+  // gateway posts back with an auto-submitting form a plain HTTP client won't follow on its own.
+  // Walk that until we're back on a Panopto page that isn't the login page. If the gateway asks
+  // for the Reichman password on the way, it's typed only into Reichman pages.
   private async ensureAuth() {
     if (this.authed) return;
+    try {
+      await this.walkLogin();
+    } catch (error) {
+      if (!(error instanceof LoginError) || error.code !== "unexpected_page" || !this.gatewaySignIn) throw error;
+      await this.gatewaySignIn();
+      await this.walkLogin();
+    }
+    this.authed = true;
+  }
+
+  private async walkLogin() {
     const creds = this.credentials?.() ?? { username: "", password: "" };
     const panoptoHost = new URL(this.host).host;
     await navigateThroughLogin(
       this.browser,
-      `${this.host}/Panopto/Pages/Auth/Login.aspx?instance=MoodleProd${this.moodleYear}`,
+      // "IDCPROD" ("RUNI Account") is Panopto's Reichman sign-in. (The MoodleProd{year} providers
+      // only work when launched from inside Moodle; checked live 2026-10-16.)
+      `${this.host}/Panopto/Pages/Auth/Login.aspx?instance=IDCPROD`,
       creds,
       (page) => {
         const url = new URL(page.url);
         return url.host === panoptoHost && /^\/Panopto\//i.test(url.pathname) && !/\/Auth\/Login\.aspx$/i.test(url.pathname) && !/<form[^>]*>[\s\S]*SAMLResponse|onload=["'][^"']*submit/i.test(page.text());
       },
     );
-    this.authed = true;
   }
 
   // Signs in again on the next call (after the Moodle session was renewed).
@@ -68,6 +82,14 @@ export class PanoptoClient {
   }
 
   async search(query: string, maxResults = 15): Promise<PanoptoSession[]> {
+    const first = await this.searchOnce(query, maxResults);
+    if (first.length > 0) return first;
+    // Signed out, Panopto returns no results rather than an error; sign in again and retry once.
+    this.authed = false;
+    return this.searchOnce(query, maxResults);
+  }
+
+  private async searchOnce(query: string, maxResults: number): Promise<PanoptoSession[]> {
     await this.ensureAuth();
     const data = await this.browser.json<{ d: { Results: RawSession[] } }>(
       `${this.host}/Panopto/Services/Data.svc/GetSessions`,

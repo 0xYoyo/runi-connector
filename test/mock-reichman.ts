@@ -204,18 +204,22 @@ export function startMockReichman(
     }
 
     // ---------- Panopto (auto-auth off Moodle, JSON data API, SRT transcripts) ----------
-    // Panopto hands off to Moodle, which posts back with an auto-submitting form.
+    // Panopto signs in via the My RUNI gateway (SAML, provider "IDCPROD"). Without a gateway
+    // session the gateway shows a dead-end "access not found" page (seen live).
     if (url.pathname === "/Panopto/Pages/Auth/Login.aspx" && req.method === "GET") {
-      return redirect(`/moodle/blocks/panopto/SSO.php?callback=panopto`);
+      if (url.searchParams.get("instance") !== "IDCPROD") return redirect("/gw/F5Networks-SSO-Req");
+      return redirect("/gw/F5Networks-SSO-Req?app=panopto");
     }
-    if (url.pathname === "/moodle/blocks/panopto/SSO.php") {
-      if (!moodleLoggedIn) return redirect("/moodle/login/index.php");
+    if (url.pathname === "/gw/F5Networks-SSO-Req") {
+      if (url.searchParams.get("app") !== "panopto" || !yedionGateway.has(jar.YGateway ?? "")) {
+        return send(200, `<html><head><title>IDC-Herzliya - access not found</title></head><body><p>לצערנו משהו השתבש...</p><a href="/">לחצו כאן להתחברות מחדש</a></body></html>`);
+      }
       return send(200, `<html><body onload="document.forms[0].submit()">
-        <form method="post" action="${base}/Panopto/Pages/Auth/Login.aspx"><input type="hidden" name="authCode" value="moodle-ok"></form></body></html>`);
+        <form method="post" action="${base}/Panopto/Pages/Auth/Login.aspx"><input type="hidden" name="SAMLResponse" value="panopto-ok"><input type="hidden" name="RelayState" value="r"></form></body></html>`);
     }
     if (url.pathname === "/Panopto/Pages/Auth/Login.aspx" && req.method === "POST") {
       const body = await readBody(req);
-      if (body.get("authCode") !== "moodle-ok") return send(400, "bad");
+      if (body.get("SAMLResponse") !== "panopto-ok") return send(400, "bad");
       const sid = crypto.randomUUID();
       panoptoSessions.add(sid);
       return redirect("/Panopto/Pages/Home.aspx", { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/Panopto` });
@@ -281,29 +285,51 @@ export function startMockReichman(
       if (!yedionSessions.has(jar.YSession ?? "")) return send(200, LOGGED_OUT_PAGE);
       const body = await readBody(req);
       const prg = body.get("PRGNAME");
+      const yearOptions = `<option value="">בחירת שנה</option><option value="-1">כל השנים</option><option value="2027" selected>2027 - תשפ"ז</option><option value="2026">2026 - תשפ"ו</option>`;
+      const semOptions = `<option value="בחירת שנה">בחירת שנה</option><option value="0">שנתי</option><option value="1" selected>1</option><option value="2">2</option>`;
       if (prg === "MenuCall") {
-        // grades request screen
-        return send(
-          200,
-          `<html><body><form name="form" method="post" action="fireflyweb.aspx">
-            <input type="hidden" name="TZ" value="123">
-            <input type="hidden" name="Token" value="tok-abc">
-            <input type="hidden" name="QueryCode" value="13">
-            <select name="R1C1"><option value="-1">all</option></select>
-            <select name="R1C2"><option value="0">year</option></select>
-          </form></body></html>`,
-        );
+        const menu = body.get("ARGUMENTS")?.match(/-N(\d+),-A/)?.[1];
+        const queryCode = menu === "6" ? "" : `<input type="hidden" name="QueryCode" value="${menu}">`;
+        const terms = menu === "6" ? `<select name="Terms"><option value="0" selected>כל המועדים</option></select>` : "";
+        return send(200, `<html><body><form name="form" method="post" action="fireflyweb.aspx">
+          <input type="hidden" name="PRGNAME" value=""><input type="hidden" name="ARGUMENTS" value="">
+          <input type="hidden" name="TZ" value="123456789"><input type="hidden" name="Token" value="tok-${menu}">${queryCode}
+          <select name="R1C1">${yearOptions}</select><select name="R1C2">${semOptions}</select>${terms}
+        </form></body></html>`);
       }
-      if (prg === "StudentQueryExecution") {
-        if (body.get("Token") !== "tok-abc") return send(200, "<html><body>bad token</body></html>");
-        return send(
-          200,
-          `<html><body>
-            <div class="Box_ph"><h2 class="pagetitle">77 אלגוריתמים</h2><div class="InRange">5</div><div class="InRange">שיעור</div><div><strong>ציון: 95</strong></div></div>
-            <div class="Box_ph"><h2 class="pagetitle">109 מבוא להסתברות</h2><div class="InRange">4</div><div class="InRange">שיעור</div><div><strong>ציון: טרם</strong></div></div>
-          </body></html>`,
-        );
+      const grid = (rows: string[][]) =>
+        `<main><div class="card MasterTable"><div class="Table">${rows
+          .map((r) => `<div class="row">${r.map((c) => `<div class="col">${c}</div>`).join("")}</div>`)
+          .join("")}</div></div></main>`;
+      if (prg === "StudentQueryExecution" && body.get("ARGUMENTS") === "TZ,Token,QueryCode,R1C1,R1C2") {
+        const code = body.get("QueryCode");
+        if (body.get("Token") !== `tok-${code}`) return send(200, "<html><body>bad token</body></html>");
+        if (code === "13") {
+          const card = (course: string, part: string, sitting: string, grade: string) =>
+            `<div class="Box_ph"><div class="InRange">${course}</div><div class="InRange">נקודות זכות  / שעות סמסטריאליות  / מועד ${sitting}</div><div class="InRange">${part}</div><div>B.Sc</div><strong>ציון: ${grade}</strong></div>`;
+          const all = body.get("R1C1") === "-1";
+          return send(200, `<html><body>${card("77 אלגוריתמים", "שיעור", "1", "95")}${card("77 אלגוריתמים", "תרגול", "1", "88")}${
+            all ? card("52 חשבון אינפיניטיסמלי א'", "שיעור", "2", "81") : ""
+          }${card("109 מבוא להסתברות", "שיעור", "1", "טרם")}</body></html>`);
+        }
+        if (code === "16") {
+          if (body.get("R1C2") === "0") return send(200, `<html><body><main>לא מוגדרת מערכת שעות לתחום שנבחר</main></body></html>`);
+          return send(200, `<html><body><main><p>מ.ז 123456789</p></main>${grid([
+            ["", "יום ראשון", "יום שני", "יום שלישי"],
+            ["08:45", "", "109-מבוא להסתברות שיעור מר נוביק עמית אולם H1 08:45-11:15", ""],
+            ["09:45", "", "המשך מבוא להסתברות", "3030-תכנות מתקדם תרגול מר קריב אביעד SL302 09:45-11:15"],
+          ])}</body></html>`);
+        }
       }
+      if (prg === "HADPASAT_TOCHNIT_BEHINOT" && body.get("ARGUMENTS") === "TZ,Token,R1C1,R1C2,R1C3") {
+        if (body.get("Token") !== "tok-6") return send(200, "<html><body>bad token</body></html>");
+        return send(200, `<html><body>${grid([
+          ["מועד", "קוד קורס", "שם קורס", "תאריך", "שעת התחלה", "חדר בחינה"],
+          ["1", "77", "אלגוריתמים", "25/01/2027", "09:45", "טרם נקבע"],
+          ["2", "77", "אלגוריתמים", "20/02/2027", "09:45", "טרם נקבע"],
+        ])}</body></html>`);
+      }
+      return send(200, "<html><body>unknown query</body></html>");
     }
 
     // ---------- Piazza (separate account; form login + JSON-RPC with a CSRF-Token header) ----------

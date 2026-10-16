@@ -38,7 +38,8 @@ const INSTRUCTIONS = `Tools for a Reichman University student's own courses (Moo
 - Course arguments accept a course name (Hebrew or English), a course number like "77", or a Moodle id.
 - Syllabi include grading formulas, AI policies, attendance rules and reading lists.
 - AI policies differ per course (some ban AI on graded work entirely). Before helping with an assignment, check that course's syllabus AI policy and respect it; explaining material and exam prep are always fine.
-- This connector is unofficial and read-only.`;
+- This connector is unofficial and read-only.
+- If a tool says the account isn't connected or a saved password stopped working, it includes a sign-in link: show it to the user as a clickable link (the page usually also opens in their browser by itself). connect_account opens it any time, e.g. to add Piazza or change a login.`;
 
 function htmlToText(html = ""): string {
   return html
@@ -84,10 +85,15 @@ export interface PanoptoLike {
   transcript(deliveryId: string): Promise<string | null>;
   viewerLink(deliveryId: string, atSeconds?: number): string;
 }
+interface MichlolSelection {
+  year: string;
+  semester: string;
+  years: string[];
+}
 export interface MichlolLike {
-  grades(year?: number | "all", semester?: number): Promise<Array<{ course: string; component: string; grade: string; credits: string }>>;
-  examSchedule(year?: number | "all", semester?: number): Promise<string>;
-  weeklySchedule(year?: number | "all", semester?: number): Promise<string>;
+  grades(year?: number | "all", semester?: number): Promise<{ data: Array<{ course: string; component: string; sitting: string; grade: string }>; selection: MichlolSelection }>;
+  examSchedule(year?: number | "all", semester?: number): Promise<{ data: string; selection: MichlolSelection }>;
+  weeklySchedule(year?: number | "all", semester?: number): Promise<{ data: string; selection: MichlolSelection }>;
 }
 export interface PiazzaLike {
   configured: boolean;
@@ -100,6 +106,8 @@ export interface PiazzaLike {
 export interface BuildOptions {
   /** Called when Moodle rejects the token. Return fresh props to retry the tool once. */
   onSessionExpired?: () => Promise<UserProps>;
+  /** Called when a tool needs a session and none is held yet (may reuse one already signed in). */
+  ensureConnected?: () => Promise<UserProps>;
   /** Downloads and caches one course's syllabus on demand (local versions only). */
   fetchSyllabus?: (course: MoodleCourse) => Promise<void>;
   /** Lecture recordings + transcripts (local versions only). */
@@ -126,13 +134,15 @@ export class NotConnectedError extends Error {
   }
 }
 
+declare const __APP_VERSION__: string | undefined;
+
 export function buildServer(
   initialProps: UserProps | null,
   kv: KVNamespace,
   options: BuildOptions = {},
 ): McpServer {
   const server = new McpServer(
-    { name: "reichman-runi", version: "1.0.1" },
+    { name: "reichman-runi", version: typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev" },
     { instructions: options.updateNotice ? `${INSTRUCTIONS}\n\n${options.updateNotice}` : INSTRUCTIONS },
   );
   let props = initialProps;
@@ -152,9 +162,9 @@ export function buildServer(
 
   // One sign-in at a time, even if several tools need one together.
   let connecting: Promise<void> | undefined;
-  async function connect() {
+  async function connect(fresh = true) {
     connecting ??= (async () => {
-      props = await options.onSessionExpired!();
+      props = fresh || !options.ensureConnected ? await options.onSessionExpired!() : await options.ensureConnected();
       moodle = new MoodleClient(props.moodleBase, props.moodleToken);
       coursesPromise = undefined;
     })().finally(() => (connecting = undefined));
@@ -163,15 +173,17 @@ export function buildServer(
 
   // Wraps a tool handler so it connects on demand, recovers from an expired token once, and
   // turns "not set up yet" into a clear instruction rather than a crash.
-  function safe<A>(handler: (args: A) => Promise<ReturnType<typeof text>>) {
+  function safe<A>(handler: (args: A) => Promise<ReturnType<typeof text>>, needsMoodle = true) {
     return async (args: A) => {
       try {
-        if (!props && options.onSessionExpired) await connect();
+        if (needsMoodle && !props && options.onSessionExpired) await connect(false);
         return await handler(args);
       } catch (error) {
         if (error instanceof NotConnectedError) {
           return failure(
-            "No Reichman account is connected yet. Run the connect_account tool (or open the connector's setup page) and sign in, then try again.",
+            error.message && error.message !== "Not connected to Reichman yet."
+              ? error.message
+              : "No Reichman account is connected yet. Run the connect_account tool (or open the connector's setup page) and sign in, then try again.",
           );
         }
         if (error instanceof MoodleSessionExpired) {
@@ -180,7 +192,7 @@ export function buildServer(
             await connect();
             return await handler(args);
           } catch (retryError) {
-            if (retryError instanceof NotConnectedError) return failure(error.message);
+            if (retryError instanceof NotConnectedError) return failure(retryError.message || error.message);
             return failure(`Couldn't sign in again automatically: ${(retryError as Error).message}`);
           }
         }
@@ -524,23 +536,33 @@ export function buildServer(
   // ---------- Student Info Station: official grades ----------
   if (options.michlol) {
     const michlol = options.michlol;
+    const yearArg = z.union([z.number().int(), z.literal("all")]).optional();
+    const selectionLine = (sel: MichlolSelection) =>
+      `(Showing ${sel.year}${sel.semester ? `, semester ${sel.semester}` : ""}. Other years available: ${sel.years.slice(0, 8).join(", ")}.)`;
+
     server.registerTool(
       "get_official_grades",
       {
         title: "Official grades (Student Info Station)",
         description:
-          "Your official grades from the Student Info Station (not the Moodle gradebook): final course grades, including 'not yet' where a grade isn't published.",
+          "Your official grades from the Student Info Station (not the Moodle gradebook), per course component (lecture, recitation, exam…) and sitting (מועד). 'טרם' means not published yet.",
         inputSchema: {
-          year: z.union([z.number().int(), z.literal("all")]).default("all").describe("Academic year, or 'all'"),
-          semester: z.number().int().min(0).max(6).default(0).describe("0 = whole year, 1/2 = semester"),
+          year: yearArg.describe("Academic year like 2027 (= תשפ\"ז), or 'all' (default)"),
+          semester: z.number().int().min(0).max(9).optional().describe("0 = whole year (default), 1/2/3 = semester"),
         },
         annotations: readOnly,
       },
-      safe(async ({ year, semester }: { year: number | "all"; semester: number }) => {
-        const rows = await michlol.grades(year, semester);
-        if (rows.length === 0) return text("No grade rows found for that selection.");
-        const lines = rows.map((r) => `- ${r.course}${r.component ? ` (${r.component})` : ""}: ${r.grade || "—"}`);
-        return text(truncate(`Official grades:\n${lines.join("\n")}`));
+      safe(async ({ year, semester }: { year?: number | "all"; semester?: number }) => {
+        const { data: rows, selection } = await michlol.grades(year ?? "all", semester);
+        if (rows.length === 0) return text(`No grades found. ${selectionLine(selection)}`);
+        // Group components under each course.
+        const byCourse = new Map<string, string[]>();
+        for (const r of rows) {
+          const part = `${r.component || "grade"}${r.sitting && r.sitting !== "1" ? ` (מועד ${r.sitting})` : ""}: ${r.grade || "—"}`;
+          byCourse.set(r.course, [...(byCourse.get(r.course) ?? []), part]);
+        }
+        const lines = [...byCourse].map(([course, parts]) => `- ${course} — ${parts.join(", ")}`);
+        return text(truncate(`Official grades ${selectionLine(selection)}\n${lines.join("\n")}`));
       }),
     );
 
@@ -548,16 +570,16 @@ export function buildServer(
       "get_exam_schedule",
       {
         title: "Exam schedule (Student Info Station)",
-        description: "Your exam dates and sittings (Moed A/B) from the Student Info Station.",
+        description: "Your exams (all sittings / מועדים) with date, time, room and registration status. Defaults to the current semester.",
         inputSchema: {
-          year: z.union([z.number().int(), z.literal("all")]).default("all"),
-          semester: z.number().int().min(0).max(6).default(0),
+          year: yearArg.describe("Academic year like 2027; default: current"),
+          semester: z.number().int().min(0).max(9).optional().describe("1/2/3; default: current"),
         },
         annotations: readOnly,
       },
-      safe(async ({ year, semester }: { year: number | "all"; semester: number }) => {
-        const body = await michlol.examSchedule(year, semester);
-        return text(body ? truncate(`Exam schedule:\n${body}`) : "No exam schedule found for that selection.");
+      safe(async ({ year, semester }: { year?: number | "all"; semester?: number }) => {
+        const { data, selection } = await michlol.examSchedule(year, semester);
+        return text(truncate(`Exam schedule ${selectionLine(selection)}\n${data || "No exams listed."}`));
       }),
     );
 
@@ -565,16 +587,16 @@ export function buildServer(
       "get_weekly_schedule",
       {
         title: "Weekly class schedule (Student Info Station)",
-        description: "Your weekly class timetable from the Student Info Station.",
+        description: "Your weekly timetable by day: course, lecture/recitation, lecturer, room and hours. Defaults to the current semester.",
         inputSchema: {
-          year: z.union([z.number().int(), z.literal("all")]).default("all"),
-          semester: z.number().int().min(0).max(6).default(0),
+          year: yearArg.describe("Academic year like 2027; default: current"),
+          semester: z.number().int().min(0).max(9).optional().describe("1/2/3; default: current"),
         },
         annotations: readOnly,
       },
-      safe(async ({ year, semester }: { year: number | "all"; semester: number }) => {
-        const body = await michlol.weeklySchedule(year, semester);
-        return text(body ? truncate(`Weekly schedule:\n${body}`) : "No schedule found for that selection.");
+      safe(async ({ year, semester }: { year?: number | "all"; semester?: number }) => {
+        const { data, selection } = await michlol.weeklySchedule(year, semester);
+        return text(truncate(`Weekly schedule ${selectionLine(selection)}\n${data || "No timetable for this selection."}`));
       }),
     );
   }
@@ -584,7 +606,7 @@ export function buildServer(
     const piazza = options.piazza;
     const needsSetup = () =>
       text(
-        "Piazza isn't set up. Piazza uses a separate login, so add your Piazza email and password in the extension's settings (Claude Desktop → Settings → Extensions → Reichman Courses), then try again.",
+        "Piazza isn't connected. Piazza has its own login (not your Reichman one). Run connect_account to open the sign-in page and add Piazza there (it's the optional second step), then try again.",
       );
 
     server.registerTool(
@@ -600,7 +622,7 @@ export function buildServer(
         const classes = await piazza.classes();
         if (classes.length === 0) return text("No Piazza classes found on your account.");
         return text(`Your Piazza classes:\n${classes.map((c) => `- ${c.name}${c.num ? ` (${c.num})` : ""} — ${c.term}`).join("\n")}`);
-      }),
+      }, false),
     );
 
     server.registerTool(
@@ -624,7 +646,7 @@ export function buildServer(
         return text(
           `Posts in ${cls.name} matching "${query}":\n${posts.map((p) => `- @${p.number} [${p.type}] ${p.subject}`).join("\n")}\n\nUse piazza_read_post with the course and a post number.`,
         );
-      }),
+      }, false),
     );
 
     server.registerTool(
@@ -644,7 +666,7 @@ export function buildServer(
         if (!cls) return text(`No Piazza class matches "${course}".`);
         const post = await piazza.post(cls.id, post_number);
         return text(truncate(`@${post.number} [${post.type}] ${post.subject}\n\n${post.content}`));
-      }),
+      }, false),
     );
   }
 

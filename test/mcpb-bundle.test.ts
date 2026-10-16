@@ -33,6 +33,8 @@ beforeAll(async () => {
         RUNI_DATA_DIR: dataDir,
         RUNI_SETUP_PORT: "0",
         RUNI_NO_SELF_UPDATE: "1",
+        RUNI_NO_BROWSER: "1",
+        PIAZZA_HOST: mock.base,
         RUNI_CREDENTIALS_BACKEND: "file",
         MOODLE_BASE: `${mock.base}/moodle`,
         SYLLABUS_URL: `${mock.base}/myruni/syllabigenerator/pdf/renderdocument?SectionIDC=`,
@@ -79,7 +81,8 @@ run("bundled .mcpb server (signs in itself from username+password)", () => {
 
   it("tells the user Piazza needs setup when no Piazza login is configured", async () => {
     const result = await client.callTool({ name: "piazza_list_classes", arguments: {} });
-    expect(text(result)).toContain("separate login");
+    expect(text(result)).toContain("own login");
+    expect(text(result)).toContain("connect_account");
   });
 
   it("signed in and lists courses + grades", async () => {

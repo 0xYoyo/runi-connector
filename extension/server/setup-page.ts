@@ -9,6 +9,9 @@ export interface SetupState {
   piazzaConnected: boolean;
   suggestedUsername: string;
   storageName: string;
+  piazzaEmail?: string;
+  reichmanNotice?: string; // shown on the Reichman step, e.g. "your saved password stopped working"
+  piazzaNotice?: string;
 }
 
 const escape = (value: string) => value.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -223,7 +226,7 @@ export function setupPage(state: SetupState): string {
       S.reichmanConnected = true; S.reichmanName = data.name || null; S.suggestedUsername = user;
       $('r-pass').value = '';
       if (S.piazzaConnected) { renderDone(); show('done'); return; }
-      if (!$('p-email').value) $('p-email').value = user + '@post.runi.ac.il';
+      if (!$('p-email').value) $('p-email').value = S.piazzaEmail || user + '@post.runi.ac.il';
       show('piazza'); $('p-pass').focus();
     });
   });
@@ -238,7 +241,7 @@ export function setupPage(state: SetupState): string {
   });
 
   $('p-skip').addEventListener('click', function () { renderDone(); show('done'); });
-  $('done-piazza-btn').addEventListener('click', function () { setMsg($('p-msg'), '', ''); show('piazza'); $('p-pass').focus(); });
+  $('done-piazza-btn').addEventListener('click', function () { setMsg($('p-msg'), '', ''); if (!$('p-email').value) $('p-email').value = S.piazzaEmail || (S.suggestedUsername ? S.suggestedUsername + '@post.runi.ac.il' : ''); show('piazza'); $('p-pass').focus(); });
   $('done-change-btn').addEventListener('click', function () { setMsg($('r-msg'), '', ''); show('reichman'); $('r-user').select(); });
 
   function renderDone() {
@@ -252,7 +255,10 @@ export function setupPage(state: SetupState): string {
   }
 
   $('r-user').value = S.suggestedUsername || '';
-  if (S.reichmanConnected) { renderDone(); show('done'); } else { show('reichman'); ($('r-user').value ? $('r-pass') : $('r-user')).focus(); }
+  if (S.reichmanNotice) setMsg($('r-msg'), 'err', S.reichmanNotice);
+  if (S.piazzaNotice) { setMsg($('p-msg'), 'err', S.piazzaNotice); }
+  if (S.reichmanConnected && S.piazzaNotice) { $('p-email').value = S.piazzaEmail || (S.suggestedUsername ? S.suggestedUsername + '@post.runi.ac.il' : ''); show('piazza'); $('p-pass').focus(); }
+  else if (S.reichmanConnected) { renderDone(); show('done'); } else { show('reichman'); ($('r-user').value ? $('r-pass') : $('r-user')).focus(); }
 })();
 </script>
 </body></html>`;
