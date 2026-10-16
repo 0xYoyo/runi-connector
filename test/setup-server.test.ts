@@ -14,6 +14,7 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "runi-setup-"));
   process.env.RUNI_DATA_DIR = dir;
   process.env.RUNI_CREDENTIALS_BACKEND = "file";
+  process.env.RUNI_SETUP_PORT = "0";
   server = new SetupServer({
     verifyReichman: async (u, p) => (u === "yoav.zrihan" && p === "right" ? { ok: true, name: "Yoav" } : { ok: false, error: "nope" }),
     verifyPiazza: async (_e, p) => (p === "right" ? { ok: true } : { ok: false, error: "nope" }),
@@ -24,6 +25,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  server.close();
+  delete process.env.RUNI_SETUP_PORT;
   delete process.env.RUNI_DATA_DIR;
   delete process.env.RUNI_CREDENTIALS_BACKEND;
 });

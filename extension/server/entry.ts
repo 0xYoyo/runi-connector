@@ -24,7 +24,7 @@ import { DEFAULT_SYLLABUS_URL, harvestSyllabi } from "../../src/syllabi";
 import { buildServer, type MichlolLike, type PanoptoLike, type PiazzaLike, type UserProps } from "../../src/tools";
 import { moodleBaseCandidates } from "./entry-year";
 import { clearCredentials, dataDir, loadCredentials } from "./credentials";
-import { openInBrowser, SetupServer } from "./setup-server";
+import { openInBrowser, openOnce, SetupServer } from "./setup-server";
 import { checkForUpdate, updateNotice } from "./updates";
 
 // Read the installed version from the manifest next to this bundle (best-effort).
@@ -186,8 +186,7 @@ async function main() {
       log("startup sign-in failed:", (error as Error).message);
     }
   } else {
-    log("no account saved; opening the sign-in page");
-    openInBrowser(setupUrl);
+    if (openOnce(setupUrl)) log("no account saved; opened the sign-in page");
   }
 
   const update = await checkForUpdate(currentVersion());
@@ -213,8 +212,9 @@ async function main() {
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
     async () => {
-      openInBrowser(setupUrl);
-      return { content: [{ type: "text" as const, text: `Opened the sign-in page: ${setupUrl}\nSign in there, then come back and ask again.` }] };
+      await setup.start();
+      openInBrowser(setup.url());
+      return { content: [{ type: "text" as const, text: `Opened the sign-in page in your browser. If it didn't open, go to: ${setup.url()}\nSign in there, then come back and ask again.` }] };
     },
   );
 

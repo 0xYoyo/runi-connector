@@ -132,7 +132,7 @@ export function buildServer(
   options: BuildOptions = {},
 ): McpServer {
   const server = new McpServer(
-    { name: "reichman-runi", version: "1.0.0" },
+    { name: "reichman-runi", version: "1.0.1" },
     { instructions: options.updateNotice ? `${INSTRUCTIONS}\n\n${options.updateNotice}` : INSTRUCTIONS },
   );
   let props = initialProps;
