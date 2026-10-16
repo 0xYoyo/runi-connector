@@ -42,7 +42,20 @@ You may have to sign in again when the Moodle token expires. How long that takes
 
 > Your Reichman password is the same one used for email and other university systems. This tool is built to never keep it, but it is unofficial: use it only on your own account, and only if you're comfortable with that.
 
-## Run it locally (personal use)
+## For non-technical friends: the one-click install (Claude Desktop)
+
+No terminal, no setup. They need the **Claude Desktop** app (free), on Mac or Windows.
+
+1. Download **`reichman-courses.mcpb`** (the file this project builds under `dist/`, or from the repo's Releases).
+2. Double-click it. Claude Desktop opens an install screen.
+3. Enter your Reichman **username** and **password**, then click Install.
+4. In any chat, ask: *"list my courses"*, *"what's the grade formula for Algorithms?"*, *"what's due this week?"*
+
+What the install does with the password: Claude Desktop stores it in your computer's own secure storage (Keychain on Mac, Credential Manager on Windows) and hands it to the connector only to sign in to Reichman's login page. It isn't stored by this project, logged, or sent anywhere else. Everything runs on your own computer. Read-only. To remove it: Claude Desktop → Settings → Extensions → remove.
+
+To build the file yourself: `npm install && npm run build:ext` → `dist/reichman-courses.mcpb`.
+
+## Run it locally (personal use, via the terminal)
 
 Reichman's bot protection blocks Moodle API calls from cloud servers, so the hosted version doesn't work today. The local version runs on your own computer, with your own account, through Moodle's official mobile-app API.
 

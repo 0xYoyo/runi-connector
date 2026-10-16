@@ -34,6 +34,13 @@ Unofficial remote MCP server (Cloudflare Worker) that lets Reichman University s
 - `local/server.ts` (`npm run mcp`) is a stdio MCP server reusing `src/tools.ts`. Never write to stdout there; it's the MCP channel.
 - Hosted Worker is blocked: Reichman's Moodle sits behind Reblaze bot protection, which returns an HTTP 247 JS challenge to Cloudflare egress. Do not try to evade it (no headless-browser challenge solving, proxies or UA spoofing). Hosted access waits on official permission from Reichman IT.
 
+## Desktop extension (.mcpb) — easiest install for non-technical users
+
+- `extension/manifest.json` + `extension/server/entry.ts`: a Claude Desktop extension. `user_config` collects username + password (password `sensitive: true`, stored by the OS keychain, passed as env vars). The server signs in itself and auto-refreshes on token expiry (`buildServer`'s `onSessionExpired`).
+- `scripts/build-extension.mjs` (`npm run build:ext`) bundles `entry.ts` + deps with esbuild into `dist/extension/server/index.js` and zips `dist/reichman-courses.mcpb`. `npm run test:ext` builds then runs `test/mcpb-bundle.test.ts`.
+- Same non-negotiable rules apply: password only in memory, token only in the OS-provided secure config + the local syllabus cache. Don't log the password.
+- This is the local/stdio transport, so it is NOT subject to the Reblaze block — it runs on the user's machine.
+
 ## Notes
 
 - `MOODLE_BASE` is per academic year (`https://moodle.runi.ac.il/2027`); update every October.

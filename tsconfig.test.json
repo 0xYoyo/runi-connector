@@ -10,6 +10,7 @@
     "src",
     "test",
     "scripts",
-    "local"
+    "local",
+    "extension"
   ]
 }

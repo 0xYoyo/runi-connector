@@ -1,0 +1,65 @@
+{
+  "manifest_version": "0.3",
+  "name": "reichman-courses",
+  "display_name": "Reichman Courses (unofficial)",
+  "version": "0.2.0",
+  "description": "Ask Claude about your own Reichman University Moodle courses: syllabi, grade formulas, deadlines, slides, grades. Unofficial, read-only, runs on your computer.",
+  "author": {
+    "name": "0xYoyo"
+  },
+  "license": "MIT",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "RUNI_USERNAME": "${user_config.username}",
+        "RUNI_PASSWORD": "${user_config.password}",
+        "MOODLE_BASE": "${user_config.moodle_base}"
+      }
+    }
+  },
+  "user_config": {
+    "username": {
+      "type": "string",
+      "title": "Reichman username",
+      "description": "The username you use to sign in to Moodle / My RUNI.",
+      "required": true
+    },
+    "password": {
+      "type": "string",
+      "title": "Reichman password",
+      "description": "Used only to sign in to the university login page. It is stored securely by your computer and never sent anywhere except Reichman's own login.",
+      "sensitive": true,
+      "required": true
+    },
+    "moodle_base": {
+      "type": "string",
+      "title": "Moodle address (advanced)",
+      "description": "Leave as-is unless the academic year changed. Reichman uses one Moodle per year.",
+      "default": "https://moodle.runi.ac.il/2027",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "tools": [
+    { "name": "list_courses", "description": "List your current Moodle courses" },
+    { "name": "get_syllabus", "description": "A course syllabus: topics, grade formula, AI policy, attendance, reading list" },
+    { "name": "get_course_contents", "description": "Sections, activities and files in a course" },
+    { "name": "read_course_file", "description": "Read a PDF or text file from a course" },
+    { "name": "get_upcoming_deadlines", "description": "Upcoming due dates across all courses" },
+    { "name": "get_assignments", "description": "A course's assignments with due dates" },
+    { "name": "get_my_grades", "description": "Your grades in a course's Moodle gradebook" },
+    { "name": "get_announcements", "description": "Latest posts in a course's announcements forum" },
+    { "name": "search_course_materials", "description": "Find activities and files by name across courses" }
+  ]
+}

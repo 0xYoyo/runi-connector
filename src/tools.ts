@@ -74,29 +74,55 @@ function failure(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
 }
 
-// Wraps a tool handler so expired sessions and other errors come back as readable messages.
-function safe<A>(handler: (args: A) => Promise<ReturnType<typeof text>>) {
-  return async (args: A) => {
-    try {
-      return await handler(args);
-    } catch (error) {
-      if (error instanceof MoodleSessionExpired) return failure(error.message);
-      return failure(`Error: ${(error as Error).message}`);
-    }
-  };
-}
-
 const readOnly = { readOnlyHint: true, openWorldHint: false };
 
-export function buildServer(props: UserProps, kv: KVNamespace): McpServer {
+export interface BuildOptions {
+  /** Called when Moodle rejects the token. Return fresh props to retry the tool once. */
+  onSessionExpired?: () => Promise<UserProps>;
+}
+
+export function buildServer(initialProps: UserProps, kv: KVNamespace, options: BuildOptions = {}): McpServer {
   const server = new McpServer(
-    { name: "reichman-runi", version: "0.1.0" },
+    { name: "reichman-runi", version: "0.2.0" },
     { instructions: INSTRUCTIONS },
   );
-  const moodle = new MoodleClient(props.moodleBase, props.moodleToken);
+  let props = initialProps;
+  let moodle = new MoodleClient(props.moodleBase, props.moodleToken);
 
   let coursesPromise: Promise<MoodleCourse[]> | undefined;
   const courses = () => (coursesPromise ??= moodle.courses(props.userId));
+
+  // One sign-in at a time, even if several tools hit an expired token together.
+  let refreshing: Promise<void> | undefined;
+  async function refreshSession() {
+    refreshing ??= (async () => {
+      props = await options.onSessionExpired!();
+      moodle = new MoodleClient(props.moodleBase, props.moodleToken);
+      coursesPromise = undefined;
+    })().finally(() => (refreshing = undefined));
+    return refreshing;
+  }
+
+  // Wraps a tool handler so expired sessions and other errors come back as readable messages.
+  // With onSessionExpired, an expired token triggers one automatic sign-in and retry.
+  function safe<A>(handler: (args: A) => Promise<ReturnType<typeof text>>) {
+    return async (args: A) => {
+      try {
+        return await handler(args);
+      } catch (error) {
+        if (error instanceof MoodleSessionExpired) {
+          if (!options.onSessionExpired) return failure(error.message);
+          try {
+            await refreshSession();
+            return await handler(args);
+          } catch (retryError) {
+            return failure(`Couldn't sign in again automatically: ${(retryError as Error).message}`);
+          }
+        }
+        return failure(`Error: ${(error as Error).message}`);
+      }
+    };
+  }
 
   async function resolveCourse(query: string): Promise<MoodleCourse> {
     const all = await courses();
