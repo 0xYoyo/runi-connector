@@ -86,6 +86,8 @@ export interface PanoptoLike {
 }
 export interface MichlolLike {
   grades(year?: number | "all", semester?: number): Promise<Array<{ course: string; component: string; grade: string; credits: string }>>;
+  examSchedule(year?: number | "all", semester?: number): Promise<string>;
+  weeklySchedule(year?: number | "all", semester?: number): Promise<string>;
 }
 export interface PiazzaLike {
   configured: boolean;
@@ -108,6 +110,8 @@ export interface BuildOptions {
   piazza?: PiazzaLike;
   /** Caption text compactor, injected so tools.ts stays free of the panopto module. */
   srtToText?: (srt: string) => string;
+  /** If a newer version is available, a one-line notice appended to the server instructions. */
+  updateNotice?: string;
 }
 
 function srtPlain(result: string): string {
@@ -128,8 +132,8 @@ export function buildServer(
   options: BuildOptions = {},
 ): McpServer {
   const server = new McpServer(
-    { name: "reichman-runi", version: "0.5.0" },
-    { instructions: INSTRUCTIONS },
+    { name: "reichman-runi", version: "1.0.0" },
+    { instructions: options.updateNotice ? `${INSTRUCTIONS}\n\n${options.updateNotice}` : INSTRUCTIONS },
   );
   let props = initialProps;
   let moodle = props ? new MoodleClient(props.moodleBase, props.moodleToken) : null;
@@ -537,6 +541,40 @@ export function buildServer(
         if (rows.length === 0) return text("No grade rows found for that selection.");
         const lines = rows.map((r) => `- ${r.course}${r.component ? ` (${r.component})` : ""}: ${r.grade || "—"}`);
         return text(truncate(`Official grades:\n${lines.join("\n")}`));
+      }),
+    );
+
+    server.registerTool(
+      "get_exam_schedule",
+      {
+        title: "Exam schedule (Student Info Station)",
+        description: "Your exam dates and sittings (Moed A/B) from the Student Info Station.",
+        inputSchema: {
+          year: z.union([z.number().int(), z.literal("all")]).default("all"),
+          semester: z.number().int().min(0).max(6).default(0),
+        },
+        annotations: readOnly,
+      },
+      safe(async ({ year, semester }: { year: number | "all"; semester: number }) => {
+        const body = await michlol.examSchedule(year, semester);
+        return text(body ? truncate(`Exam schedule:\n${body}`) : "No exam schedule found for that selection.");
+      }),
+    );
+
+    server.registerTool(
+      "get_weekly_schedule",
+      {
+        title: "Weekly class schedule (Student Info Station)",
+        description: "Your weekly class timetable from the Student Info Station.",
+        inputSchema: {
+          year: z.union([z.number().int(), z.literal("all")]).default("all"),
+          semester: z.number().int().min(0).max(6).default(0),
+        },
+        annotations: readOnly,
+      },
+      safe(async ({ year, semester }: { year: number | "all"; semester: number }) => {
+        const body = await michlol.weeklySchedule(year, semester);
+        return text(body ? truncate(`Weekly schedule:\n${body}`) : "No schedule found for that selection.");
       }),
     );
   }

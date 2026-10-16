@@ -1,6 +1,6 @@
 {
-  "name": "runi-connector",
-  "version": "0.1.0",
+  "name": "reichman-courses-connector",
+  "version": "1.0.0",
   "description": "Unofficial MCP connector that lets Reichman University students ask Claude, ChatGPT, Codex or Gemini about their own Moodle courses and syllabi.",
   "scripts": {
     "dev": "wrangler dev",
@@ -11,7 +11,8 @@
     "login": "tsx local/login.ts",
     "mcp": "tsx local/server.ts",
     "build:ext": "node scripts/build-extension.mjs",
-    "test:ext": "node scripts/build-extension.mjs && vitest run test/mcpb-bundle.test.ts"
+    "test:ext": "node scripts/build-extension.mjs && vitest run test/mcpb-bundle.test.ts",
+    "prepublishOnly": "npm run build:ext"
   },
   "license": "MIT",
   "dependencies": {
@@ -30,5 +31,17 @@
     "vitest": "^5.0.4",
     "wrangler": "^4.151.0"
   },
-  "private": true
+  "private": true,
+  "bin": {
+    "reichman-courses-connector": "dist/extension/server/index.js"
+  },
+  "files": [
+    "dist/extension/server/index.js",
+    "dist/extension/manifest.json",
+    "dist/extension/icon.png",
+    "src",
+    "extension",
+    "README.md",
+    "LICENSE"
+  ]
 }

@@ -1,94 +1,76 @@
-# RUNI Connector (unofficial)
+# Reichman Courses (unofficial)
 
-Ask Claude, ChatGPT, Codex or Gemini about your own Reichman University courses:
+Ask Claude about your own Reichman University courses, in plain language:
 
 > "What's the grade formula for Algorithms?"
 > "What's due this week?"
-> "Summarize the week 3 slides in Digital Systems."
-> "Is AI allowed on the Advanced Programming homework?"
+> "Find Max's recitation 5 in probability and tell me if he covers the bell curve."
+> "What did I get in Digital Systems?"
 
-It's a remote MCP server: you add it like the GitHub or Linear connector, sign in once with your Reichman account, and forget about it.
+It runs on your own computer, signs in with your Reichman account, and is **read-only**.
 
-**Unofficial student project. Not affiliated with or endorsed by Reichman University. Opt-in and read-only.**
+**Unofficial student project. Not affiliated with or endorsed by Reichman University.**
 
-## Tools
+## Install — Claude Desktop (no terminal)
 
-| Tool | What it does |
-| --- | --- |
-| `list_courses` | Your current Moodle courses, with course numbers |
-| `get_syllabus` | The official syllabus: topics, grade formula, AI policy, attendance, reading list |
-| `get_course_contents` | Sections, activities and files in a course |
-| `read_course_file` | Reads a PDF or text/code file from a course |
-| `get_upcoming_deadlines` | Upcoming due dates across all courses |
-| `get_assignments` | A course's assignments with due dates and instructions |
-| `get_my_grades` | Your grade items in a course's Moodle gradebook |
-| `get_announcements` | Latest posts in a course's announcements forum |
-| `search_course_materials` | Finds activities and files by name across all courses |
-| `search_lectures` | Finds Panopto lecture/recitation recordings |
-| `get_lecture_transcript` | Reads a recording's transcript (with timestamps) |
-| `get_official_grades` | Official grades from the Student Info Station |
-| `piazza_list_classes` / `piazza_search` / `piazza_read_post` | Piazza Q&A (needs a separate Piazza login) |
-| `forget_my_data` | Deletes the course data saved on your computer |
+1. Install the free **Claude Desktop** app (Mac or Windows).
+2. Download **`reichman-courses.mcpb`** from the [latest release](https://github.com/0xYoyo/runi-connector/releases/latest) and double-click it. Click Install.
+3. A sign-in page opens in your browser. Enter your Reichman username and password (it's checked on the spot). Add Piazza on the next step if you use it, or skip.
+4. In any chat: *"list my courses"*, *"what's due this week?"*
 
-Courses can be named in Hebrew or English, by course number (`77`) or by Moodle id.
+To sign in again, change your login, or add Piazza later, ask Claude to **"connect my Reichman account"** (the `connect_account` tool reopens the sign-in page).
 
-## How sign-in works
+## Install — ChatGPT app (Codex) or Claude Code
 
-Reichman doesn't offer outside apps a "Sign in with Reichman" button, and students can't generate a Moodle API token themselves. So the connector completes the normal university login for you once, and keeps only the Moodle app token it gets at the end (the same token the official Moodle mobile app uses).
+Needs [Node.js](https://nodejs.org) 18+. One line, no clone:
 
-What the server does with your credentials:
+**ChatGPT app:** Settings → MCP servers → Add, choose **STDIO**, command `npx`, args `-y reichman-courses-connector`. Or add to `~/.codex/config.toml`:
 
-- Your password is used for a single login request and is **never** written to the database, logs, or analytics. A unit test asserts it never appears in any error message or request trace.
-- Only the resulting **Moodle token** is stored, encrypted by the OAuth layer so that only your connected AI app can unwrap it. The server operator cannot read it from the database.
-- The sign-in page loads no external scripts or resources (`script-src 'none'`), can't be framed, and isn't cached, so nothing can scrape the password field.
-- Access is **read-only** and you can disconnect any time from your AI app's connector settings.
+```toml
+[mcp_servers.reichman]
+command = "npx"
+args = ["-y", "reichman-courses-connector"]
+```
 
-You may have to sign in again when the Moodle token expires. How long that takes is Reichman's setting; run the probe script below to measure it.
-
-> Your Reichman password is the same one used for email and other university systems. This tool is built to never keep it, but it is unofficial: use it only on your own account, and only if you're comfortable with that.
-
-## For non-technical friends: the one-click install (Claude Desktop)
-
-No terminal, no setup. They need the **Claude Desktop** app (free), on Mac or Windows.
-
-1. Download **`reichman-courses.mcpb`** (the file this project builds under `dist/`, or from the repo's Releases).
-2. Double-click it. Claude Desktop opens an install screen.
-3. Enter your Reichman **username** and **password**, then click Install.
-4. In any chat, ask: *"list my courses"*, *"what's the grade formula for Algorithms?"*, *"what's due this week?"*
-
-What the install does with the password: Claude Desktop stores it in your computer's own secure storage (Keychain on Mac, Credential Manager on Windows) and hands it to the connector only to sign in to Reichman's login page. It isn't stored by this project, logged, or sent anywhere else. Everything runs on your own computer. Read-only. To remove it: Claude Desktop → Settings → Extensions → remove.
-
-To build the file yourself: `npm install && npm run build:ext` → `dist/reichman-courses.mcpb`.
-
-## Run it locally (personal use, via the terminal)
-
-Reichman's bot protection blocks Moodle API calls from cloud servers, so the hosted version doesn't work today. The local version runs on your own computer, with your own account, through Moodle's official mobile-app API.
+**Claude Code:**
 
 ```sh
-npm install
-npm run login      # once; asks for your username + password, saves only the Moodle token
+claude mcp add --scope user reichman -- npx -y reichman-courses-connector
 ```
 
-Your token and the syllabus cache live in `~/.runi-connector/` (owner-only files). Delete that folder to sign out. Run `npm run login` again if Moodle says your access expired.
+The first run opens the same sign-in page in your browser. `npx` always fetches the latest version, so these stay up to date on their own.
 
-**Claude Code** (any project, any terminal):
+## What it can do
+
+Moodle: list courses, read the syllabus (grade formula, AI policy, attendance, reading list), browse course contents, read a PDF or slide, upcoming deadlines, assignments, Moodle grades, announcements, search materials.
+Lectures: search Panopto recordings and read their transcripts (with timestamps).
+Student Info Station: official grades, exam schedule, weekly timetable.
+Piazza (optional, separate login): list classes, search, read posts.
+Plus `connect_account` (open the sign-in page) and `forget_my_data` (delete your saved login and cached data).
+
+Courses can be named in Hebrew or English, by course number (`77`), or by Moodle id.
+
+## How sign-in works, and what happens to your password
+
+Reichman doesn't offer outside apps a "Sign in with Reichman" button, and students can't generate a Moodle API token themselves. So the connector completes the normal university login for you, on your own computer.
+
+- Your password is **verified against Reichman's real login** before anything is saved, then kept in your computer's own secure storage — macOS Keychain, Windows' encrypted user storage, or a private file on other systems.
+- It is used only to sign in to Reichman (and Piazza, if you add it). It is never logged, never sent anywhere else, and a test asserts it never appears in any error or trace.
+- The sign-in page runs locally, loads nothing external, and is protected by a one-time key so no other program or website can drive it.
+- Everything is read-only. `forget_my_data` erases it all.
+
+> Your Reichman password also opens email and other university systems. This tool never keeps it anywhere but your own machine, but it is unofficial — use it on your own account only, if you're comfortable with that.
+
+## Releasing a new version
+
+Push a tag and GitHub Actions builds and publishes everything:
 
 ```sh
-claude mcp add --scope user reichman -- "$PWD/node_modules/.bin/tsx" "$PWD/local/server.ts"
+npm version patch   # or minor / major — bumps package.json + git tag
+git push --follow-tags
 ```
 
-**Claude Desktop:** add this to `~/Library/Application Support/Claude/claude_desktop_config.json` (replace the path), then restart the app:
-
-```json
-{
-  "mcpServers": {
-    "reichman": {
-      "command": "/Users/YOU/repos/runi-connector/node_modules/.bin/tsx",
-      "args": ["/Users/YOU/repos/runi-connector/local/server.ts"]
-    }
-  }
-}
-```
+The workflow runs the tests, builds `reichman-courses.mcpb`, attaches it to a GitHub Release, and (if an `NPM_TOKEN` secret is set) publishes the npm package. Running connectors notice the new release and tell the user to update; `npx` users update automatically. Bump `extension/manifest.json`'s `version` to match before tagging.
 
 ## Deploy your own (Cloudflare Workers)
 

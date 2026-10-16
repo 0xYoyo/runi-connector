@@ -7,7 +7,7 @@
 
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,6 +19,8 @@ rmSync(join(root, "dist"), { recursive: true, force: true });
 mkdirSync(join(staging, "server"), { recursive: true });
 
 // 1. Bundle the TypeScript server + all deps (unpdf, the MCP SDK, etc.) into one CJS file.
+// The shebang + banner lets the same file run as `node index.js` (inside the .mcpb) and as a
+// CLI via `npx` (for Codex / Claude Code), where a working directory may not be writable.
 await build({
   entryPoints: [join(root, "extension", "server", "entry.ts")],
   outfile: join(staging, "server", "index.js"),
@@ -28,7 +30,9 @@ await build({
   format: "cjs",
   minify: true,
   legalComments: "none",
+  banner: { js: "#!/usr/bin/env node" },
 });
+chmodSync(join(staging, "server", "index.js"), 0o755);
 
 // 2. Copy the manifest and icon next to it.
 cpSync(join(root, "extension", "manifest.json"), join(staging, "manifest.json"));

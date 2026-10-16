@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "reichman-courses",
   "display_name": "Reichman Courses (unofficial)",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "description": "Ask Claude about your Reichman courses: Moodle, syllabi, grades, lecture recordings & transcripts, Piazza. Unofficial, read-only, runs on your computer.",
   "author": {
     "name": "0xYoyo"
@@ -99,6 +99,14 @@
     {
       "name": "piazza_read_post",
       "description": "Read a Piazza post"
+    },
+    {
+      "name": "get_exam_schedule",
+      "description": "Your exam dates and sittings"
+    },
+    {
+      "name": "get_weekly_schedule",
+      "description": "Your weekly class timetable"
     }
   ]
 }

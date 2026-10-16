@@ -25,6 +25,16 @@ import { buildServer, type MichlolLike, type PanoptoLike, type PiazzaLike, type 
 import { moodleBaseCandidates } from "./entry-year";
 import { clearCredentials, dataDir, loadCredentials } from "./credentials";
 import { openInBrowser, SetupServer } from "./setup-server";
+import { checkForUpdate, updateNotice } from "./updates";
+
+// Read the installed version from the manifest next to this bundle (best-effort).
+function currentVersion(): string {
+  try {
+    return JSON.parse(readFileSync(join(__dirname, "..", "manifest.json"), "utf8")).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 const log = (...parts: unknown[]) => console.error("[reichman]", ...parts); // stdout is the MCP channel
 
@@ -101,6 +111,8 @@ async function main() {
   };
   const michlol: MichlolLike = {
     grades: (year, sem) => new MichlolClient(needBrowser(), michlolHost).grades(year, sem),
+    examSchedule: (year, sem) => new MichlolClient(needBrowser(), michlolHost).examSchedule(year, sem),
+    weeklySchedule: (year, sem) => new MichlolClient(needBrowser(), michlolHost).weeklySchedule(year, sem),
   };
 
   let piazzaClient: PiazzaClient | undefined;
@@ -178,6 +190,9 @@ async function main() {
     openInBrowser(setupUrl);
   }
 
+  const update = await checkForUpdate(currentVersion());
+  if (update) log(`update available: v${update.latest} (have v${update.current})`);
+
   const server = buildServer(ref.session ? ref.session!.props : null, cache, {
     onSessionExpired: connectReichman,
     fetchSyllabus,
@@ -185,6 +200,7 @@ async function main() {
     michlol,
     piazza,
     srtToText,
+    updateNotice: update ? updateNotice(update) : undefined,
   });
 
   server.registerTool(

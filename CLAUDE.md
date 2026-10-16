@@ -49,6 +49,16 @@ Unofficial remote MCP server (Cloudflare Worker) that lets Reichman University s
 - Hosts are overridable by env (PANOPTO_HOST, MICHLOL_HOST, SYLLABUS_URL) for tests only; defaults are the real hosts.
 - Panopto/Michlol/Piazza tools are registered only when buildServer gets their BuildOptions providers, so the hosted Worker never exposes them.
 
+## Sign-in, credential store, updates (v1.0, extension/server/)
+
+- `credentials.ts`: OS secure store — macOS Keychain (`security -i`, value via stdin), Windows DPAPI (PowerShell), else 0600 file. Hex-encoded JSON. Env overrides for tests: RUNI_DATA_DIR, RUNI_CREDENTIALS_BACKEND=file.
+- `setup-page.ts` + `setup-server.ts`: the connector's own two-step sign-in page on 127.0.0.1, nonce-protected (page needs ?k=nonce; POSTs need X-Setup-Nonce). Verifies each login against the real service before saving. CSP loads nothing external. Opened on first run and via the `connect_account` tool.
+- `entry.ts`: loads creds from the store; signs in on startup if present, else opens setup. Tools connect on demand (buildServer initialProps can be null; NotConnectedError → "run connect_account"). `forget_my_data` clears store + cache.
+- `updates.ts`: checks GitHub latest release; a newer version appends an UPDATE AVAILABLE line to the server instructions so Claude tells the user once.
+- npm bin `reichman-courses-connector` → `dist/extension/server/index.js` (shebang added by build). `npx -y reichman-courses-connector` is the Codex/Claude Code install. Package name: reichman-courses-connector.
+- Release: `.github/workflows/release.yml` on tag `v*` runs tests, builds the .mcpb, makes a GitHub Release with it attached, and npm-publishes if NPM_TOKEN secret is set. Keep manifest.json version == package.json version before tagging.
+- Michlol now also has examSchedule/weeklySchedule (generic `pageText` + `michlolText` stripper). contactAdminForm exists but NO send tool yet — a real write to student admin needs careful live verification before enabling; gate it behind confirm-before-send when added.
+
 ## Notes
 
 - `MOODLE_BASE` is per academic year (`https://moodle.runi.ac.il/2027`); update every October.

@@ -86,6 +86,37 @@ export class MichlolClient {
     return parseGradeCards(result.text());
   }
 
+  // Opens a Michlol page by menu id and returns its readable text. If the page is a
+  // year/semester query screen, it runs the query for the chosen year first. Robust for pages
+  // whose exact layout we don't parse field-by-field (schedule, exams): the model reads the text.
+  async pageText(menuId: number, year: number | "all" = "all", semester = 0): Promise<string> {
+    await this.ensureAuth();
+    const page = await this.openMenu(menuId);
+    let html = page.text();
+    const { TZ, Token, QueryCode } = this.queryFields(html);
+    const hasQueryForm = Boolean(Token) && /R1C1/.test(html) && /בחירת שנה|select year/i.test(html);
+    if (hasQueryForm) {
+      const body = new URLSearchParams({
+        PRGNAME: "StudentQueryExecution",
+        ARGUMENTS: "TZ,Token,QueryCode,R1C1,R1C2",
+        TZ,
+        Token,
+        QueryCode,
+        R1C1: year === "all" ? "-1" : String(year),
+        R1C2: String(semester),
+      });
+      html = (await this.browser.request(this.endpoint, { method: "POST", body, referer: this.endpoint })).text();
+    }
+    return michlolText(html);
+  }
+
+  examSchedule(year: number | "all" = "all", semester = 0) {
+    return this.pageText(MENU.exams, year, semester);
+  }
+  weeklySchedule(year: number | "all" = "all", semester = 0) {
+    return this.pageText(MENU.scheduleBoard, year, semester);
+  }
+
   // Opens the contact-admin page and returns the recipient and topic options plus the form token,
   // so the tool layer can show the user exactly what will be sent before confirming.
   async contactAdminForm(): Promise<{ recipients: string[]; token: string }> {
@@ -99,6 +130,19 @@ export class MichlolClient {
     const token = doc.querySelector("input[name=Token]")?.getAttribute("value") ?? "";
     return { recipients, token };
   }
+}
+
+// Strips a Michlol page to readable text: drops nav/menu/scripts, keeps the main content.
+export function michlolText(html: string): string {
+  const doc = parse(html);
+  for (const sel of ["script", "style", "nav", "header", "footer", ".menu", "#menu", ".mainmenu"]) {
+    doc.querySelectorAll(sel).forEach((el) => el.remove());
+  }
+  const main = doc.querySelector("#mainContent, main, .maincontent, .content, #region-main") ?? doc.querySelector("body") ?? doc;
+  return main.text
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n+/g, "\n")
+    .trim();
 }
 
 export function parseGradeCards(html: string): GradeRow[] {
