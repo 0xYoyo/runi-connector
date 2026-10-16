@@ -7,7 +7,7 @@
 
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,7 +31,13 @@ await build({
   minify: true,
   legalComments: "none",
   banner: { js: "#!/usr/bin/env node" },
+  define: { __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version) },
 });
+
+// The manifest and package versions must match (Claude Desktop shows the manifest's).
+const pkgVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+const manifestVersion = JSON.parse(readFileSync(join(root, "extension", "manifest.json"), "utf8")).version;
+if (pkgVersion !== manifestVersion) throw new Error(`manifest.json is v${manifestVersion} but package.json is v${pkgVersion}`);
 chmodSync(join(staging, "server", "index.js"), 0o755);
 
 // 2. Copy the manifest and icon next to it.

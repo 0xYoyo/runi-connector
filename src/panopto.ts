@@ -2,6 +2,7 @@
 // same Browser that signed in to Moodle. Read-only: list/search recordings and read captions.
 
 import type { Browser } from "./browser";
+import { navigateThroughLogin, type Credentials } from "./reichman-login";
 
 export const PANOPTO_HOST = "https://runi.cloud.panopto.eu";
 
@@ -38,13 +39,32 @@ export class PanoptoClient {
     private readonly browser: Browser,
     private readonly moodleYear: number,
     private readonly host: string = PANOPTO_HOST,
+    private readonly credentials?: () => Credentials | undefined,
   ) {}
 
-  // Visit the Moodle-provider login once; it sets Panopto cookies from the Moodle session.
+  // Panopto signs in through Moodle: its login page hands off to Moodle, which posts back to
+  // Panopto (via auto-submitting forms and script redirects a plain HTTP client won't follow on
+  // its own). Walk that until we're back on a Panopto page that isn't the login page. If Moodle
+  // or My RUNI asks for the Reichman password on the way, it's typed only into Reichman pages.
   private async ensureAuth() {
     if (this.authed) return;
-    await this.browser.request(`${this.host}/Panopto/Pages/Auth/Login.aspx?instance=MoodleProd${this.moodleYear}`);
+    const creds = this.credentials?.() ?? { username: "", password: "" };
+    const panoptoHost = new URL(this.host).host;
+    await navigateThroughLogin(
+      this.browser,
+      `${this.host}/Panopto/Pages/Auth/Login.aspx?instance=MoodleProd${this.moodleYear}`,
+      creds,
+      (page) => {
+        const url = new URL(page.url);
+        return url.host === panoptoHost && /^\/Panopto\//i.test(url.pathname) && !/\/Auth\/Login\.aspx$/i.test(url.pathname) && !/<form[^>]*>[\s\S]*SAMLResponse|onload=["'][^"']*submit/i.test(page.text());
+      },
+    );
     this.authed = true;
+  }
+
+  // Signs in again on the next call (after the Moodle session was renewed).
+  reset() {
+    this.authed = false;
   }
 
   async search(query: string, maxResults = 15): Promise<PanoptoSession[]> {

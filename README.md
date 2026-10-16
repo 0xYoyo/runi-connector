@@ -20,6 +20,8 @@ It runs on your own computer, signs in with your Reichman account, and is **read
 
 To sign in again, change your login, or add Piazza later, ask Claude to **"connect my Reichman account"** (the `connect_account` tool reopens the sign-in page).
 
+**Updates are automatic.** You install once. The connector downloads new versions in the background (checked against npm's published checksum) and switches to them the next time Claude starts it. If a new version ever fails to start, it falls back to the one that worked.
+
 ## Install — ChatGPT app (Codex) or Claude Code
 
 Needs [Node.js](https://nodejs.org) 18+. One line, no clone:
@@ -38,7 +40,9 @@ args = ["-y", "reichman-courses-connector"]
 claude mcp add --scope user reichman -- npx -y reichman-courses-connector
 ```
 
-The first run opens the same sign-in page in your browser. `npx` always fetches the latest version, so these stay up to date on their own.
+The first run opens the same sign-in page in your browser. Updates are automatic here too (same updater as the Claude Desktop version).
+
+Both installs run the same npm package; the .mcpb is just the double-click wrapper Claude Desktop needs, since Claude Desktop can't run an `npx` line without a terminal.
 
 ## What it can do
 
@@ -63,14 +67,17 @@ Reichman doesn't offer outside apps a "Sign in with Reichman" button, and studen
 
 ## Releasing a new version
 
-Push a tag and GitHub Actions builds and publishes everything:
+One-time setup: create an npm account (turn on 2FA), make an **automation** access token, and add it to the GitHub repo as the `NPM_TOKEN` Actions secret.
+
+Then, for each release:
 
 ```sh
-npm version patch   # or minor / major — bumps package.json + git tag
+npm version patch   # or minor / major — bumps package.json + creates the git tag
+# set the same version in extension/manifest.json (the build refuses to run if they differ), commit
 git push --follow-tags
 ```
 
-The workflow runs the tests, builds `reichman-courses.mcpb`, attaches it to a GitHub Release, and (if an `NPM_TOKEN` secret is set) publishes the npm package. Running connectors notice the new release and tell the user to update; `npx` users update automatically. Bump `extension/manifest.json`'s `version` to match before tagging.
+The workflow runs the tests, builds `reichman-courses.mcpb`, attaches it to a GitHub Release, and publishes the npm package. Every installed connector (Claude Desktop and npx) picks the new version up on its own; nobody re-downloads anything.
 
 ## Deploy your own (Cloudflare Workers)
 
@@ -103,7 +110,7 @@ The probe reads your password from a hidden prompt and never writes it anywhere.
 ## Develop and test
 
 ```sh
-npm test            # 8 tests against a fake Reichman; no real login or network
+npm test            # tests against a fake Reichman (and a real headless Chromium for the sign-in page); no real login
 npm run typecheck   # worker + test typechecks
 
 # optional full end-to-end against the OAuth flow:

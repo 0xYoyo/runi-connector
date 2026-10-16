@@ -5,6 +5,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 export const VALID_USER = { username: "student1", password: "correct-horse" };
+export const VALID_PIAZZA = { email: "student1@post.runi.ac.il", password: "piazza-pass" };
 export const MOODLE_TOKEN = "0123456789abcdef0123456789abcdef";
 
 function cookies(req: IncomingMessage): Record<string, string> {
@@ -57,9 +58,28 @@ ${error ? `<p class="err">${error}</p>` : ""}
   <input type="submit" value="Login">
 </form></body></html>`;
 
-export function startMockReichman(port = 0, options: { requireMfa?: boolean } = {}): Promise<{ server: Server; base: string }> {
+const DENIED_PAGE = `<!doctype html><html><head><title>Reichman University - access denied</title></head><body>
+<p>Your session could not be established.</p><a href="/">Click here to continue</a></body></html>`;
+
+// The page My RUNI shows when a session is gone (seen live).
+const LOGGED_OUT_PAGE = `<!doctype html><html><head><title>Reichman University</title></head><body>
+<p>בוצעה התנתקות</p><a href="/">לחץ כאן להמשך</a></body></html>`;
+
+const passwordAttempts: string[] = []; // every password the fake login server received
+export function receivedPasswords() {
+  return passwordAttempts;
+}
+
+export function startMockReichman(
+  port = 0,
+  options: { requireMfa?: boolean; wrongPasswordShowsForm?: boolean } = {},
+): Promise<{ server: Server; base: string }> {
   const sessions = new Set<string>(); // moodle sessions
   const idpSessions = new Set<string>();
+  const yedionGateway = new Set<string>(); // My RUNI gateway sessions for the Student Info Station
+  const yedionSessions = new Set<string>();
+  const panoptoSessions = new Set<string>();
+  const piazzaSessions = new Map<string, string>(); // session -> csrf
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
@@ -163,8 +183,10 @@ export function startMockReichman(port = 0, options: { requireMfa?: boolean } = 
     if (url.pathname === "/idp/my.policy" && req.method === "GET") return send(200, loginForm());
     if (url.pathname === "/idp/my.policy" && req.method === "POST") {
       const body = await readBody(req);
+      passwordAttempts.push(body.get("password") ?? "");
       if (body.get("username") !== VALID_USER.username || body.get("password") !== VALID_USER.password) {
-        return send(200, loginForm("Invalid username or password"));
+        // The real gateway answers a wrong password with a dead-end page (HTTP 200, no form).
+        return send(200, options.wrongPasswordShowsForm ? loginForm("Invalid username or password") : DENIED_PAGE);
       }
       if (options.requireMfa) {
         return send(200, `<html><body><form method="post" action="/idp/mfa"><input type="text" name="otp_code"><input type="submit"></form></body></html>`);
@@ -182,12 +204,28 @@ export function startMockReichman(port = 0, options: { requireMfa?: boolean } = 
     }
 
     // ---------- Panopto (auto-auth off Moodle, JSON data API, SRT transcripts) ----------
-    if (url.pathname === "/Panopto/Pages/Auth/Login.aspx") {
-      const sid = crypto.randomUUID();
-      sessions.add(sid);
-      return send(200, "<html><body>ok</body></html>", { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/` });
+    // Panopto hands off to Moodle, which posts back with an auto-submitting form.
+    if (url.pathname === "/Panopto/Pages/Auth/Login.aspx" && req.method === "GET") {
+      return redirect(`/moodle/blocks/panopto/SSO.php?callback=panopto`);
     }
+    if (url.pathname === "/moodle/blocks/panopto/SSO.php") {
+      if (!moodleLoggedIn) return redirect("/moodle/login/index.php");
+      return send(200, `<html><body onload="document.forms[0].submit()">
+        <form method="post" action="${base}/Panopto/Pages/Auth/Login.aspx"><input type="hidden" name="authCode" value="moodle-ok"></form></body></html>`);
+    }
+    if (url.pathname === "/Panopto/Pages/Auth/Login.aspx" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.get("authCode") !== "moodle-ok") return send(400, "bad");
+      const sid = crypto.randomUUID();
+      panoptoSessions.add(sid);
+      return redirect("/Panopto/Pages/Home.aspx", { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/Panopto` });
+    }
+    if (url.pathname === "/Panopto/Pages/Home.aspx") return send(200, "<html><body>Panopto home</body></html>");
     if (url.pathname === "/Panopto/Services/Data.svc/GetSessions" && req.method === "POST") {
+      // Signed out, Panopto doesn't error: it just finds nothing (seen live).
+      if (!panoptoSessions.has(jar[".ASPXAUTH"] ?? "")) {
+        return send(200, JSON.stringify({ d: { Results: [], TotalNumber: 0 } }), { "Content-Type": "application/json" });
+      }
       const body = JSON.parse((await readRaw(req)) || "{}");
       const q = body?.queryParameters?.query ?? "";
       return send(
@@ -220,13 +258,27 @@ export function startMockReichman(port = 0, options: { requireMfa?: boolean } = 
     }
 
     // ---------- Student Info Station (Michlol) ----------
+    // Its own gateway login, separate from Moodle's (seen live: yedion -> my.runi.ac.il/my.policy).
     if (url.pathname === "/yedion/login.aspx") {
-      if (!(jar.MRHSession && idpSessions.has(jar.MRHSession))) return redirect("/idp/my.policy");
+      if (!yedionGateway.has(jar.YGateway ?? "")) return redirect("/gw/my.policy");
       const sid = crypto.randomUUID();
-      sessions.add(sid);
+      yedionSessions.add(sid);
       return redirect("/yedion/fireflyweb.aspx", { "Set-Cookie": `YSession=${sid}; Path=/yedion` });
     }
+    if (url.pathname === "/gw/my.policy" && req.method === "GET") return send(200, loginForm().replace("/idp/my.policy", "/gw/my.policy"));
+    if (url.pathname === "/gw/my.policy" && req.method === "POST") {
+      const body = await readBody(req);
+      passwordAttempts.push(body.get("password") ?? "");
+      if (body.get("username") !== VALID_USER.username || body.get("password") !== VALID_USER.password) return send(200, DENIED_PAGE);
+      const sid = crypto.randomUUID();
+      yedionGateway.add(sid);
+      return redirect("/yedion/login.aspx?Type=S", { "Set-Cookie": `YGateway=${sid}; Path=/` });
+    }
+    if (url.pathname === "/yedion/fireflyweb.aspx" && req.method === "GET") {
+      return send(200, `<html><body><a href="fireflyweb.aspx?prgname=Menu">menu</a></body></html>`);
+    }
     if (url.pathname === "/yedion/fireflyweb.aspx" && req.method === "POST") {
+      if (!yedionSessions.has(jar.YSession ?? "")) return send(200, LOGGED_OUT_PAGE);
       const body = await readBody(req);
       const prg = body.get("PRGNAME");
       if (prg === "MenuCall") {
@@ -252,6 +304,42 @@ export function startMockReichman(port = 0, options: { requireMfa?: boolean } = 
           </body></html>`,
         );
       }
+    }
+
+    // ---------- Piazza (separate account; form login + JSON-RPC with a CSRF-Token header) ----------
+    if (url.pathname === "/account/login") {
+      return send(200, `<html><body><form id="login-form" method="post" action="${base}/class">
+        <input type="hidden" name="from" value="/signup"><input type="text" name="email"><input type="password" name="password">
+        <input type="checkbox" name="remember"><input type="submit"><input type="hidden" name="csrf_token" value="pre-login"></form></body></html>`);
+    }
+    if (url.pathname === "/class" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.get("csrf_token") !== "pre-login") return send(403, "csrf");
+      if (body.get("email") !== VALID_PIAZZA.email || body.get("password") !== VALID_PIAZZA.password) {
+        return send(200, `<html><head><script>var ERROR_MSG = "Email or password is incorrect.";</script></head><body>
+          <form id="login-form" method="post" action="${base}/class"><input type="text" name="email"><input type="password" name="password"></form></body></html>`);
+      }
+      const sid = crypto.randomUUID();
+      piazzaSessions.set(sid, "csrf-" + sid.slice(0, 8));
+      return send(200, "<html><body>Piazza classes</body></html>", { "Set-Cookie": `session_id=${sid}; Path=/` });
+    }
+    if (url.pathname === "/main/csrf_token") {
+      const csrf = piazzaSessions.get(jar.session_id ?? "") ?? "pre-login";
+      return send(200, `CSRF_TOKEN = "${csrf}";`, { "Content-Type": "application/javascript" });
+    }
+    if (url.pathname === "/logic/api" && req.method === "POST") {
+      const body = JSON.parse((await readRaw(req)) || "{}");
+      const csrf = piazzaSessions.get(jar.session_id ?? "");
+      const json = (data: unknown) => send(200, JSON.stringify(data), { "Content-Type": "application/json" });
+      if (!csrf || req.headers["csrf-token"] !== csrf) return json({ result: null, error: "Not logged in" });
+      if (url.searchParams.get("method") !== body.method) return json({ result: null, error: "method mismatch" });
+      if (body.method === "user.status")
+        return json({ result: { networks: [{ id: "net1", name: "Advanced Programming", course_number: "3030", term: "Fall 2026" }] }, error: null });
+      if (body.method === "network.search")
+        return json({ result: [{ id: "p1", nr: 12, subject: "HW2 <b>deadline</b>", type: "question" }], error: null });
+      if (body.method === "content.get")
+        return json({ result: { id: "p1", nr: 12, type: "question", history: [{ subject: "HW2 deadline", content: "<p>Is it Thursday?</p>" }] }, error: null });
+      return json({ result: null, error: `unknown ${body.method}` });
     }
 
     send(404, "not found");

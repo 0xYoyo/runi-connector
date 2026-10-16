@@ -15,9 +15,15 @@ export class LoginError extends Error {
   constructor(
     readonly code: LoginErrorCode,
     message: string,
+    readonly afterPassword = false, // a password was already sent; don't retry it elsewhere
   ) {
     super(message);
   }
+}
+
+// Only ever type the Reichman password into Reichman's own login pages (and the local test server).
+export function isReichmanHost(hostname: string): boolean {
+  return hostname === "runi.ac.il" || hostname.endsWith(".runi.ac.il") || hostname === "127.0.0.1" || hostname === "localhost";
 }
 
 export interface LoginResult {
@@ -92,7 +98,7 @@ export async function navigateThroughLogin(
   maxSteps = 15,
 ): Promise<Page> {
   let page = await browser.request(startUrl);
-  let passwordSubmissions = 0;
+  let passwordHost: string | null = null; // host we sent the password to, once we have
 
   for (let step = 0; step < maxSteps; step++) {
     if (page.customSchemeRedirect || isDone(page)) return page;
@@ -108,17 +114,21 @@ export async function navigateThroughLogin(
       continue;
     }
 
+    const host = new URL(page.url).hostname;
     const passwordForm = findPasswordForm(forms);
     if (passwordForm) {
-      if (passwordSubmissions >= 2) {
-        throw new LoginError("bad_credentials", "The username or password was not accepted.");
+      // Asked for the password again right after sending it: it was wrong. Never send it twice
+      // (repeated attempts can lock the account).
+      if (passwordHost) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
+      if (!isReichmanHost(host) || !isReichmanHost(new URL(passwordForm.action).hostname)) {
+        throw new LoginError("unexpected_page", `${host} asked for a password, but it isn't a Reichman login page.`);
       }
-      passwordSubmissions++;
+      passwordHost = host;
       page = await browser.submit(passwordForm, fillLoginForm(passwordForm, credentials), page.url);
       continue;
     }
 
-    if (passwordSubmissions > 0 && looksLikeMfaForm(forms)) {
+    if (passwordHost && looksLikeMfaForm(forms)) {
       throw new LoginError(
         "mfa_required",
         "The university asked for a second verification step, which this connector can't complete yet.",
@@ -137,12 +147,16 @@ export async function navigateThroughLogin(
       continue;
     }
 
+    // A dead end on the login server right after the password went in is how it says "wrong
+    // password" (e.g. an "access denied" page with no form).
+    if (passwordHost === host) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
     throw new LoginError(
       "unexpected_page",
-      `Stopped at an unexpected page (${new URL(page.url).host}, "${pageTitle(html)}", HTTP ${page.status}).`,
+      `Stopped at an unexpected page (${new URL(page.url).host}${new URL(page.url).pathname}, "${pageTitle(html)}", HTTP ${page.status}).`,
+      Boolean(passwordHost),
     );
   }
-  throw new LoginError("unexpected_page", "The login flow took too many steps.");
+  throw new LoginError("unexpected_page", "The login flow took too many steps.", Boolean(passwordHost));
 }
 
 export function parseMobileTokenRedirect(location: string): string {

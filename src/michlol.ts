@@ -10,7 +10,8 @@
 // separate method and the tool layer requires explicit confirmation before calling it.
 
 import { parse, type HTMLElement } from "node-html-parser";
-import type { Browser, Page } from "./browser";
+import { parseForms, type Browser, type Page } from "./browser";
+import { navigateThroughLogin, type Credentials } from "./reichman-login";
 
 export const MICHLOL_HOST = "https://yedion.runi.ac.il";
 
@@ -37,28 +38,65 @@ export interface GradeRow {
   credits: string;
 }
 
+// Pages Michlol / My RUNI show when the session is gone ("logged out", "something went wrong",
+// or the My RUNI login form).
+const SESSION_LOST = /בוצעה התנתקות|משהו השתבש|להתחברות מחדש|my\.policy|access not found/i;
+
+export class MichlolSessionLost extends Error {}
+
 export class MichlolClient {
   private authed = false;
   private readonly endpoint: string;
   constructor(
     private readonly browser: Browser,
     private readonly host: string = MICHLOL_HOST,
+    private readonly credentials?: () => Credentials | undefined,
   ) {
     this.endpoint = `${host}/yedion/fireflyweb.aspx`;
   }
 
+  // Michlol sits behind My RUNI's own gateway, which can ask for the Reichman login again even
+  // when Moodle is signed in. Walk that login (Reichman pages only) until Michlol itself loads.
   private async ensureAuth() {
     if (this.authed) return;
-    const page = await this.browser.request(`${this.host}/yedion/login.aspx?Type=S`);
-    if (/login\.aspx/i.test(new URL(page.url).pathname) && !/fireflyweb/i.test(page.url)) {
-      throw new Error("Couldn't reach the Student Info Station (sign-in didn't carry over).");
-    }
+    const creds = this.credentials?.();
+    if (!creds) throw new Error("Not connected to Reichman.");
+    const michlolHost = new URL(this.host).host;
+    await navigateThroughLogin(this.browser, `${this.host}/yedion/login.aspx?Type=S`, creds, (page) => {
+      const url = new URL(page.url);
+      if (url.host !== michlolHost) return false;
+      const html = page.text();
+      if (parseForms(html, page.url).some((f) => f.inputs.some((i) => i.type === "password"))) return false;
+      return /fireflyweb/i.test(url.pathname) || /fireflyweb\.aspx/i.test(html);
+    });
     this.authed = true;
   }
 
-  private openMenu(id: number): Promise<Page> {
+  // Runs a Michlol action, signing in first; if the session turns out to be gone, signs in again once.
+  private async withSession<T>(action: () => Promise<T>): Promise<T> {
+    await this.ensureAuth();
+    try {
+      return await action();
+    } catch (error) {
+      if (!(error instanceof MichlolSessionLost)) throw error;
+      this.authed = false;
+      await this.ensureAuth();
+      return action();
+    }
+  }
+
+  private async openMenu(id: number): Promise<Page> {
     const body = new URLSearchParams({ PRGNAME: "MenuCall", ARGUMENTS: `-N,-N,-N${id},-A` });
-    return this.browser.request(this.endpoint, { method: "POST", body, referer: this.endpoint });
+    const page = await this.browser.request(this.endpoint, { method: "POST", body, referer: this.endpoint });
+    this.checkSession(page);
+    return page;
+  }
+
+  private checkSession(page: Page) {
+    const url = new URL(page.url);
+    if (url.host !== new URL(this.host).host || SESSION_LOST.test(michlolText(page.text()).slice(0, 600))) {
+      throw new MichlolSessionLost("The Student Info Station session ended.");
+    }
   }
 
   // Reads the hidden query-form fields from a query page.
@@ -68,8 +106,11 @@ export class MichlolClient {
     return { TZ: val("TZ"), Token: val("Token"), QueryCode: val("QueryCode") };
   }
 
-  async grades(year: number | "all" = "all", semester = 0): Promise<GradeRow[]> {
-    await this.ensureAuth();
+  grades(year: number | "all" = "all", semester = 0): Promise<GradeRow[]> {
+    return this.withSession(() => this.gradesOnce(year, semester));
+  }
+
+  private async gradesOnce(year: number | "all", semester: number): Promise<GradeRow[]> {
     const page = await this.openMenu(MENU.grades);
     const { TZ, Token, QueryCode } = this.queryFields(page.text());
     if (!Token) throw new Error("Couldn't open the grades screen.");
@@ -83,14 +124,18 @@ export class MichlolClient {
       R1C2: String(semester),
     });
     const result = await this.browser.request(this.endpoint, { method: "POST", body, referer: this.endpoint });
+    this.checkSession(result);
     return parseGradeCards(result.text());
   }
 
   // Opens a Michlol page by menu id and returns its readable text. If the page is a
   // year/semester query screen, it runs the query for the chosen year first. Robust for pages
   // whose exact layout we don't parse field-by-field (schedule, exams): the model reads the text.
-  async pageText(menuId: number, year: number | "all" = "all", semester = 0): Promise<string> {
-    await this.ensureAuth();
+  pageText(menuId: number, year: number | "all" = "all", semester = 0): Promise<string> {
+    return this.withSession(() => this.pageTextOnce(menuId, year, semester));
+  }
+
+  private async pageTextOnce(menuId: number, year: number | "all", semester: number): Promise<string> {
     const page = await this.openMenu(menuId);
     let html = page.text();
     const { TZ, Token, QueryCode } = this.queryFields(html);
@@ -105,7 +150,9 @@ export class MichlolClient {
         R1C1: year === "all" ? "-1" : String(year),
         R1C2: String(semester),
       });
-      html = (await this.browser.request(this.endpoint, { method: "POST", body, referer: this.endpoint })).text();
+      const result = await this.browser.request(this.endpoint, { method: "POST", body, referer: this.endpoint });
+      this.checkSession(result);
+      html = result.text();
     }
     return michlolText(html);
   }
@@ -120,8 +167,7 @@ export class MichlolClient {
   // Opens the contact-admin page and returns the recipient and topic options plus the form token,
   // so the tool layer can show the user exactly what will be sent before confirming.
   async contactAdminForm(): Promise<{ recipients: string[]; token: string }> {
-    await this.ensureAuth();
-    const page = await this.openMenu(MENU.contactAdmin);
+    const page = await this.withSession(() => this.openMenu(MENU.contactAdmin));
     const doc = parse(page.text());
     const recipients = doc
       .querySelectorAll("select[name=R1C5] option")

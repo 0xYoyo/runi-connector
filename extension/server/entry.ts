@@ -25,16 +25,7 @@ import { buildServer, type MichlolLike, type PanoptoLike, type PiazzaLike, type 
 import { moodleBaseCandidates } from "./entry-year";
 import { clearCredentials, dataDir, loadCredentials } from "./credentials";
 import { openInBrowser, openOnce, SetupServer } from "./setup-server";
-import { checkForUpdate, updateNotice } from "./updates";
-
-// Read the installed version from the manifest next to this bundle (best-effort).
-function currentVersion(): string {
-  try {
-    return JSON.parse(readFileSync(join(__dirname, "..", "manifest.json"), "utf8")).version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
+import { downloadLatest, markHealthy, markStarting, pickDownloadedVersion, runningVersion } from "./updates";
 
 const log = (...parts: unknown[]) => console.error("[reichman]", ...parts); // stdout is the MCP channel
 
@@ -77,10 +68,31 @@ async function signIn(credentials: Credentials): Promise<Session> {
       return { props: { moodleToken, moodleBase: base, userId: site.userid, fullName: site.fullname }, browser };
     } catch (error) {
       lastError = error;
-      if (error instanceof LoginError && error.code === "bad_credentials") break;
+      // Once the password has been sent, never try it again against another year's Moodle.
+      if (error instanceof LoginError && (error.code === "bad_credentials" || error.afterPassword)) break;
     }
   }
   throw lastError;
+}
+
+const selfUpdate = !process.env.RUNI_NO_SELF_UPDATE;
+
+// If a newer, verified version was downloaded earlier, hand over to it (see updates.ts).
+// Returns true if it took over.
+function launchDownloadedVersion(): boolean {
+  if (!selfUpdate || process.env.RUNI_LAUNCHED) return false;
+  const pick = pickDownloadedVersion(dataDir(), runningVersion());
+  if (!pick) return false;
+  markStarting(dataDir(), pick.version);
+  process.env.RUNI_LAUNCHED = pick.version;
+  try {
+    require(pick.file);
+    return true;
+  } catch (error) {
+    log(`downloaded v${pick.version} failed to load:`, (error as Error).message);
+    delete process.env.RUNI_LAUNCHED;
+    return false;
+  }
 }
 
 async function main() {
@@ -104,23 +116,41 @@ async function main() {
     return ref.session.browser;
   };
 
+  const reichmanCreds = () => loadCredentials().reichman;
+
+  // One Panopto / Michlol client per signed-in session, so each signs in once, not per call.
+  const clients = new WeakMap<Browser, { panopto: PanoptoClient; michlol: MichlolClient }>();
+  const clientsFor = () => {
+    const browser = needBrowser();
+    let c = clients.get(browser);
+    if (!c) {
+      c = {
+        panopto: new PanoptoClient(browser, moodleYear(), panoptoHost, reichmanCreds),
+        michlol: new MichlolClient(browser, michlolHost, reichmanCreds),
+      };
+      clients.set(browser, c);
+    }
+    return c;
+  };
+
   const panopto: PanoptoLike = {
-    search: (q, n) => new PanoptoClient(needBrowser(), moodleYear(), panoptoHost).search(q, n),
-    transcript: (id) => new PanoptoClient(needBrowser(), moodleYear(), panoptoHost).transcript(id),
-    viewerLink: (id, at) => new PanoptoClient(needBrowser(), moodleYear(), panoptoHost).viewerLink(id, at),
+    search: (q, n) => clientsFor().panopto.search(q, n),
+    transcript: (id) => clientsFor().panopto.transcript(id),
+    viewerLink: (id, at) => clientsFor().panopto.viewerLink(id, at),
   };
   const michlol: MichlolLike = {
-    grades: (year, sem) => new MichlolClient(needBrowser(), michlolHost).grades(year, sem),
-    examSchedule: (year, sem) => new MichlolClient(needBrowser(), michlolHost).examSchedule(year, sem),
-    weeklySchedule: (year, sem) => new MichlolClient(needBrowser(), michlolHost).weeklySchedule(year, sem),
+    grades: (year, sem) => clientsFor().michlol.grades(year, sem),
+    examSchedule: (year, sem) => clientsFor().michlol.examSchedule(year, sem),
+    weeklySchedule: (year, sem) => clientsFor().michlol.weeklySchedule(year, sem),
   };
+  const piazzaHost = process.env.PIAZZA_HOST || undefined;
 
   let piazzaClient: PiazzaClient | undefined;
   async function piazzaReady(): Promise<PiazzaClient> {
     const creds = loadCredentials().piazza;
     if (!creds) throw new PiazzaAuthError("Piazza isn't set up.");
     if (!piazzaClient) {
-      piazzaClient = new PiazzaClient(new Browser());
+      piazzaClient = new PiazzaClient(new Browser(), piazzaHost);
       await piazzaClient.login(creds.email, creds.password);
     }
     return piazzaClient;
@@ -154,23 +184,26 @@ async function main() {
         return { ok: true, name: ref.session!.props.fullName };
       } catch (error) {
         const code = (error as LoginError).code;
+        if (code !== "bad_credentials") log("sign-in check failed:", (error as Error).message);
         const message =
           code === "bad_credentials"
-            ? "Reichman didn't accept that username and password."
+            ? "Wrong username or password. Use the same login as Moodle and My RUNI."
             : code === "mfa_required"
               ? "Reichman asked for a second verification step, which isn't supported yet."
-              : `Couldn't sign in: ${(error as Error).message}`;
+              : "Couldn't reach Reichman's login right now. Check your internet connection and try again.";
         return { ok: false, error: message };
       }
     },
     verifyPiazza: async (email, password) => {
       try {
-        piazzaClient = new PiazzaClient(new Browser());
+        piazzaClient = new PiazzaClient(new Browser(), piazzaHost);
         await piazzaClient.login(email, password);
         return { ok: true };
       } catch (error) {
         piazzaClient = undefined;
-        return { ok: false, error: "Piazza didn't accept that email and password." };
+        if (error instanceof PiazzaAuthError) return { ok: false, error: "Wrong Piazza email or password." };
+        log("Piazza check failed:", (error as Error).message);
+        return { ok: false, error: "Couldn't reach Piazza right now. Try again in a moment." };
       }
     },
     onChange: () => {
@@ -189,9 +222,6 @@ async function main() {
     if (openOnce(setupUrl)) log("no account saved; opened the sign-in page");
   }
 
-  const update = await checkForUpdate(currentVersion());
-  if (update) log(`update available: v${update.latest} (have v${update.current})`);
-
   const server = buildServer(ref.session ? ref.session!.props : null, cache, {
     onSessionExpired: connectReichman,
     fetchSyllabus,
@@ -199,7 +229,6 @@ async function main() {
     michlol,
     piazza,
     srtToText,
-    updateNotice: update ? updateNotice(update) : undefined,
   });
 
   server.registerTool(
@@ -238,10 +267,19 @@ async function main() {
   );
 
   await server.connect(new StdioServerTransport());
-  log("ready");
+  const version = runningVersion();
+  log(`ready (v${version})`);
+  if (process.env.RUNI_LAUNCHED === version) markHealthy(dataDir(), version);
+
+  // Fetch the next version in the background; it's used the next time the connector starts.
+  if (selfUpdate) {
+    downloadLatest(dataDir(), version)
+      .then((v) => v && log(`downloaded v${v}; it will be used next time Claude starts the connector`))
+      .catch((error) => log("update download rejected:", (error as Error).message));
+  }
 }
 
-main().catch((error) => {
+if (!launchDownloadedVersion()) main().catch((error) => {
   log("fatal:", (error as Error).message);
   process.exit(1);
 });

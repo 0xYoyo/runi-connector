@@ -2,14 +2,14 @@
 // and password, supplied as optional settings. Its web app talks to a JSON-RPC API; this
 // mirrors the public endpoints the piazza-api community library uses.
 //
-// NOTE: not yet verified against a live Reichman Piazza account. Treat as best-effort until
-// tested. Read-only: list classes, read the feed, read a post, search.
+// Sign-in matches the live site (checked 2026-10-16): the /account/login page has a regular form
+// (#login-form: from, email, password, remember, csrf_token) that posts to /class; API calls go
+// to /logic/api?method=… as JSON with a CSRF-Token header taken from /main/csrf_token.
+// Read-only: list classes, read the feed, read a post, search.
 
-import type { Browser } from "./browser";
+import { parseForms, type Browser } from "./browser";
 
-const BASE = "https://piazza.com";
-const API_LOGIC = `${BASE}/logic/api`;
-const API_MAIN = `${BASE}/main/api`;
+export const PIAZZA_HOST = "https://piazza.com";
 
 interface RpcResponse<T> {
   result?: T;
@@ -48,23 +48,60 @@ export class PiazzaAuthError extends PiazzaError {}
 
 export class PiazzaClient {
   private loggedIn = false;
-  constructor(private readonly browser: Browser) {}
+  private csrf = "";
+  private readonly logicApi: string;
+  private readonly mainApi: string;
+  constructor(
+    private readonly browser: Browser,
+    private readonly base: string = PIAZZA_HOST,
+  ) {
+    this.logicApi = `${base}/logic/api`;
+    this.mainApi = `${base}/main/api`;
+  }
 
   private async rpc<T>(endpoint: string, method: string, params: unknown): Promise<T> {
-    const res = await this.browser.json<RpcResponse<T>>(endpoint, { method, params });
+    const res = await this.browser.json<RpcResponse<T>>(`${endpoint}?method=${encodeURIComponent(method)}`, { method, params }, { "CSRF-Token": this.csrf });
     if (res.error) {
       const message = typeof res.error === "string" ? res.error : res.error.message || "Piazza error";
-      if (/login|auth|session/i.test(message)) throw new PiazzaAuthError(message);
+      if (/log ?in|auth|session|csrf/i.test(message)) throw new PiazzaAuthError(message);
       throw new PiazzaError(message);
     }
     if (res.result === undefined) throw new PiazzaError(`No result from ${method}`);
     return res.result;
   }
 
+  private async refreshCsrf(fallback: string) {
+    const page = await this.browser.request(`${this.base}/main/csrf_token`);
+    const text = page.text();
+    this.csrf = text.match(/CSRF_TOKEN\s*=\s*["']([^"']+)["']/)?.[1] ?? text.match(/["']([A-Za-z0-9._\-+/=]{8,})["']/)?.[1] ?? fallback;
+  }
+
   async login(email: string, password: string): Promise<void> {
-    await this.browser.request(`${BASE}/account/login`); // sets initial cookies
-    await this.rpc(API_LOGIC, "user.login", { email, pass: password });
+    this.loggedIn = false;
+    const page = await this.browser.request(`${this.base}/account/login`);
+    const form = parseForms(page.text(), page.url).find((f) => f.inputs.some((i) => i.type === "password"));
+    if (!form) throw new PiazzaError("Piazza's sign-in page didn't load as expected. Try again later.");
+    const passwordField = form.inputs.find((i) => i.type === "password")!.name;
+    const emailField = form.inputs.find((i) => /mail/i.test(i.name))?.name ?? "email";
+    const result = await this.browser.submit(form, { [emailField]: email, [passwordField]: password, remember: "on" }, page.url);
+    const html = result.text();
+    const stillOnLogin = parseForms(html, result.url).some((f) => f.inputs.some((i) => i.type === "password"));
+    if (/ERROR_MSG\s*=\s*["'][^"']+["']/.test(html) || (stillOnLogin && /account\/login|login-form/i.test(html))) {
+      throw new PiazzaAuthError("Piazza didn't accept that email and password.");
+    }
+    await this.refreshCsrf(form.fields.csrf_token ?? "");
+    // Confirm we're really signed in.
+    try {
+      await this.status();
+    } catch {
+      throw new PiazzaAuthError("Piazza didn't accept that email and password.");
+    }
     this.loggedIn = true;
+  }
+
+  private status() {
+    type Status = { networks?: Array<{ id: string; name: string; course_number?: string; term?: string }> };
+    return this.rpc<Status>(this.logicApi, "user.status", {}).catch(() => this.rpc<Status>(this.mainApi, "user.status", {}));
   }
 
   private ensure() {
@@ -73,11 +110,7 @@ export class PiazzaClient {
 
   async classes(): Promise<PiazzaClass[]> {
     this.ensure();
-    const user = await this.rpc<{ networks: Array<{ id: string; name: string; course_number?: string; term?: string }> }>(
-      API_MAIN,
-      "user.status",
-      {},
-    ).catch(() => null);
+    const user = await this.status();
     const nets = user?.networks ?? [];
     return nets.map((n) => ({ id: n.id, name: n.name, num: n.course_number ?? "", term: n.term ?? "" }));
   }
@@ -92,7 +125,7 @@ export class PiazzaClient {
   async feed(classId: string, limit = 25): Promise<PiazzaPost[]> {
     this.ensure();
     const data = await this.rpc<{ feed: Array<{ id: string; nr: number; subject: string; type: string; tags?: string[] }> }>(
-      API_LOGIC,
+      this.logicApi,
       "network.get_my_feed",
       { nid: classId, limit, offset: 0 },
     );
@@ -114,7 +147,7 @@ export class PiazzaClient {
       history: Array<{ subject: string; content: string }>;
       type: string;
       tags?: string[];
-    }>(API_LOGIC, "content.get", { nid: classId, cid: String(postNumber) });
+    }>(this.logicApi, "content.get", { nid: classId, cid: String(postNumber) });
     const latest = p.history?.[0] ?? { subject: "", content: "" };
     return {
       id: p.id,
@@ -129,7 +162,7 @@ export class PiazzaClient {
   async search(classId: string, query: string): Promise<PiazzaPost[]> {
     this.ensure();
     const results = await this.rpc<Array<{ id: string; nr: number; subject: string; type: string }>>(
-      API_LOGIC,
+      this.logicApi,
       "network.search",
       { nid: classId, query },
     );

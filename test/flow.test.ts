@@ -131,12 +131,3 @@ describe("academic year detection", () => {
     expect(moodleBaseCandidates(new Date("2026-10-16"))[1]).toBe("https://moodle.runi.ac.il/2026");
   });
 });
-
-describe("update check", () => {
-  it("compares versions numerically and formats a notice", async () => {
-    const { checkForUpdate } = await import("../extension/server/updates");
-    // offline/unreachable → null, never throws
-    const r = await checkForUpdate("999.0.0", 1);
-    expect(r).toBeNull();
-  });
-});

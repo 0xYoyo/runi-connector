@@ -32,6 +32,7 @@ beforeAll(async () => {
         ...process.env,
         RUNI_DATA_DIR: dataDir,
         RUNI_SETUP_PORT: "0",
+        RUNI_NO_SELF_UPDATE: "1",
         RUNI_CREDENTIALS_BACKEND: "file",
         MOODLE_BASE: `${mock.base}/moodle`,
         SYLLABUS_URL: `${mock.base}/myruni/syllabigenerator/pdf/renderdocument?SectionIDC=`,
