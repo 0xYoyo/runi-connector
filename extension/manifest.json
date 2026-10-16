@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "reichman-courses",
   "display_name": "Reichman Courses (unofficial)",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Ask Claude about your Reichman courses: Moodle, syllabi, grades, lecture recordings & transcripts, Piazza. Unofficial, read-only, runs on your computer.",
   "author": {
     "name": "0xYoyo"
@@ -17,42 +17,10 @@
       "args": [
         "${__dirname}/server/index.js"
       ],
-      "env": {
-        "RUNI_USERNAME": "${user_config.username}",
-        "RUNI_PASSWORD": "${user_config.password}",
-        "PIAZZA_EMAIL": "${user_config.piazza_email}",
-        "PIAZZA_PASSWORD": "${user_config.piazza_password}"
-      }
+      "env": {}
     }
   },
-  "user_config": {
-    "username": {
-      "type": "string",
-      "title": "Reichman username",
-      "description": "The username you use for Moodle / My RUNI.",
-      "required": true
-    },
-    "password": {
-      "type": "string",
-      "title": "Reichman password",
-      "description": "Used only to sign in to the university login page. It is stored securely by your computer and never sent anywhere except Reichman's own login.",
-      "sensitive": true,
-      "required": true
-    },
-    "piazza_email": {
-      "type": "string",
-      "title": "Piazza email (optional)",
-      "description": "Only if you use Piazza. It has a separate login from Reichman. Leave blank to skip Piazza.",
-      "required": false
-    },
-    "piazza_password": {
-      "type": "string",
-      "title": "Piazza password (optional)",
-      "description": "Your Piazza password. Stored securely by your computer; used only to sign in to Piazza.",
-      "sensitive": true,
-      "required": false
-    }
-  },
+  "user_config": {},
   "compatibility": {
     "claude_desktop": ">=0.10.0",
     "platforms": [
@@ -64,6 +32,10 @@
     }
   },
   "tools": [
+    {
+      "name": "connect_account",
+      "description": "Open the sign-in page to connect or change your Reichman / Piazza login"
+    },
     {
       "name": "list_courses",
       "description": "List your current Moodle courses"

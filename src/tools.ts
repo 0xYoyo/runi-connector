@@ -114,41 +114,69 @@ function srtPlain(result: string): string {
   return result;
 }
 
-export function buildServer(initialProps: UserProps, kv: KVNamespace, options: BuildOptions = {}): McpServer {
+// Thrown when no account is connected yet, so the tool layer can point the user to setup.
+export class NotConnectedError extends Error {
+  readonly name = "NotConnectedError";
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export function buildServer(
+  initialProps: UserProps | null,
+  kv: KVNamespace,
+  options: BuildOptions = {},
+): McpServer {
   const server = new McpServer(
-    { name: "reichman-runi", version: "0.2.0" },
+    { name: "reichman-runi", version: "0.5.0" },
     { instructions: INSTRUCTIONS },
   );
   let props = initialProps;
-  let moodle = new MoodleClient(props.moodleBase, props.moodleToken);
+  let moodle = props ? new MoodleClient(props.moodleBase, props.moodleToken) : null;
 
   let coursesPromise: Promise<MoodleCourse[]> | undefined;
-  const courses = () => (coursesPromise ??= moodle.courses(props.userId));
+  const courses = () => (coursesPromise ??= requireMoodle().courses(require(props).userId));
 
-  // One sign-in at a time, even if several tools hit an expired token together.
-  let refreshing: Promise<void> | undefined;
-  async function refreshSession() {
-    refreshing ??= (async () => {
+  const require = (p: UserProps | null): UserProps => {
+    if (!p) throw new NotConnectedError("Not connected to Reichman yet.");
+    return p;
+  };
+  const requireMoodle = (): MoodleClient => {
+    if (!moodle) throw new NotConnectedError("Not connected to Reichman yet.");
+    return moodle;
+  };
+
+  // One sign-in at a time, even if several tools need one together.
+  let connecting: Promise<void> | undefined;
+  async function connect() {
+    connecting ??= (async () => {
       props = await options.onSessionExpired!();
       moodle = new MoodleClient(props.moodleBase, props.moodleToken);
       coursesPromise = undefined;
-    })().finally(() => (refreshing = undefined));
-    return refreshing;
+    })().finally(() => (connecting = undefined));
+    return connecting;
   }
 
-  // Wraps a tool handler so expired sessions and other errors come back as readable messages.
-  // With onSessionExpired, an expired token triggers one automatic sign-in and retry.
+  // Wraps a tool handler so it connects on demand, recovers from an expired token once, and
+  // turns "not set up yet" into a clear instruction rather than a crash.
   function safe<A>(handler: (args: A) => Promise<ReturnType<typeof text>>) {
     return async (args: A) => {
       try {
+        if (!props && options.onSessionExpired) await connect();
         return await handler(args);
       } catch (error) {
+        if (error instanceof NotConnectedError) {
+          return failure(
+            "No Reichman account is connected yet. Run the connect_account tool (or open the connector's setup page) and sign in, then try again.",
+          );
+        }
         if (error instanceof MoodleSessionExpired) {
           if (!options.onSessionExpired) return failure(error.message);
           try {
-            await refreshSession();
+            await connect();
             return await handler(args);
           } catch (retryError) {
+            if (retryError instanceof NotConnectedError) return failure(error.message);
             return failure(`Couldn't sign in again automatically: ${(retryError as Error).message}`);
           }
         }
@@ -169,7 +197,7 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
   }
 
   const contents = (courseId: number) =>
-    moodle.call<CourseSection[]>("core_course_get_contents", { courseid: courseId });
+    requireMoodle().call<CourseSection[]>("core_course_get_contents", { courseid: courseId });
 
   server.registerTool(
     "list_courses",
@@ -184,7 +212,7 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
       const lines = all.map(
         (c) => `- ${c.fullname} | course no. ${c.courseNumber ?? "?"} | moodle id ${c.id}`,
       );
-      return text(`${props.fullName}'s courses (${all.length}):\n${lines.join("\n")}`);
+      return text(`${require(props).fullName}'s courses (${all.length}):\n${lines.join("\n")}`);
     }),
   );
 
@@ -284,7 +312,7 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
         filename = decodeURIComponent(new URL(file).pathname.split("/").pop() ?? file);
       }
 
-      const { bytes, contentType } = await moodle.downloadFile(fileUrl);
+      const { bytes, contentType } = await requireMoodle().downloadFile(fileUrl);
       if (isPdf(bytes, contentType)) {
         const { text: body, pages } = await pdfToText(bytes);
         return text(`${filename} (${pages} pages)\n\n${truncate(body)}`);
@@ -308,7 +336,7 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
     },
     safe(async ({ days }: { days: number }) => {
       const now = Math.floor(Date.now() / 1000);
-      const result = await moodle.call<{
+      const result = await requireMoodle().call<{
         events: Array<{ name: string; timesort: number; url?: string; modulename?: string; course?: { fullname: string } }>;
       }>("core_calendar_get_action_events_by_timesort", {
         timesortfrom: now,
@@ -333,7 +361,7 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
     },
     safe(async ({ course }: { course: string }) => {
       const found = await resolveCourse(course);
-      const result = await moodle.call<{
+      const result = await requireMoodle().call<{
         courses: Array<{ assignments: Array<{ name: string; duedate: number; intro: string; cmid: number }> }>;
       }>("mod_assign_get_assignments", { courseids: [found.id] });
       const assignments = result.courses[0]?.assignments ?? [];
@@ -355,7 +383,7 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
     },
     safe(async ({ course }: { course: string }) => {
       const found = await resolveCourse(course);
-      const result = await moodle.call<{
+      const result = await requireMoodle().call<{
         usergrades: Array<{
           gradeitems: Array<{
             itemname: string | null;
@@ -366,7 +394,7 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
             feedback: string;
           }>;
         }>;
-      }>("gradereport_user_get_grade_items", { courseid: found.id, userid: props.userId });
+      }>("gradereport_user_get_grade_items", { courseid: found.id, userid: require(props).userId });
       const items = result.usergrades[0]?.gradeitems ?? [];
       const graded = items.filter((i) => i.gradeformatted && i.gradeformatted !== "-");
       if (graded.length === 0) return text(`No grades published yet in ${found.fullname}.`);
@@ -392,13 +420,13 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
     },
     safe(async ({ course, limit }: { course: string; limit: number }) => {
       const found = await resolveCourse(course);
-      const forums = await moodle.call<Array<{ id: number; type: string; name: string }>>(
+      const forums = await requireMoodle().call<Array<{ id: number; type: string; name: string }>>(
         "mod_forum_get_forums_by_courses",
         { courseids: [found.id] },
       );
       const news = forums.find((f) => f.type === "news") ?? forums[0];
       if (!news) return text(`${found.fullname} has no announcements forum.`);
-      const result = await moodle.call<{
+      const result = await requireMoodle().call<{
         discussions: Array<{ subject: string; message: string; created: number; userfullname: string }>;
       }>("mod_forum_get_forum_discussions", { forumid: news.id, page: 0, perpage: limit });
       if (result.discussions.length === 0) return text(`No announcements yet in ${found.fullname}.`);

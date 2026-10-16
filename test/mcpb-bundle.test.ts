@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
@@ -19,7 +19,10 @@ const text = (result: any) => result.content.map((c: any) => c.text).join("\n");
 beforeAll(async () => {
   if (!existsSync(BUNDLE)) return;
   mock = await startMockReichman();
-  const cache = mkdtempSync(join(tmpdir(), "runi-ext-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "runi-ext-"));
+  // Seed the file-backed credential store (the app normally fills this from its sign-in page).
+  const creds = { reichman: { username: VALID_USER.username, password: VALID_USER.password } };
+  writeFileSync(join(dataDir, "credentials.hex"), Buffer.from(JSON.stringify(creds)).toString("hex"), { mode: 0o600 });
   client = new Client({ name: "test", version: "1.0.0" });
   await client.connect(
     new StdioClientTransport({
@@ -27,14 +30,12 @@ beforeAll(async () => {
       args: [BUNDLE],
       env: {
         ...process.env,
-        RUNI_USERNAME: VALID_USER.username,
-        RUNI_PASSWORD: VALID_USER.password,
+        RUNI_DATA_DIR: dataDir,
+        RUNI_CREDENTIALS_BACKEND: "file",
         MOODLE_BASE: `${mock.base}/moodle`,
         SYLLABUS_URL: `${mock.base}/myruni/syllabigenerator/pdf/renderdocument?SectionIDC=`,
         PANOPTO_HOST: mock.base,
         MICHLOL_HOST: mock.base,
-        XDG_CACHE_HOME: cache,
-        APPDATA: cache,
       } as Record<string, string>,
     }),
   );
