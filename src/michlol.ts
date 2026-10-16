@@ -243,7 +243,8 @@ export function parseWeeklyGrid(html: string): string | null {
   for (const row of rows.slice(1)) {
     row.forEach((cell, i) => {
       if (i === 0 || !days[i]) return;
-      for (const entry of cell.split(/\n\s*\n|\n(?=\s*\d{2,5}-)/).map(clean)) {
+      // One class per "<course no.>-<name>" chunk; lines inside a class (e.g. its room) stay together.
+      for (const entry of cell.split(/\n\s*(?=\d{2,5}-)/).map(clean)) {
         if (!entry || /^המשך/.test(entry)) continue;
         if (!byDay.has(days[i])) byDay.set(days[i], []);
         if (!byDay.get(days[i])!.includes(entry)) byDay.get(days[i])!.push(entry);
@@ -262,12 +263,13 @@ export function parseTableGrid(html: string): string | null {
   const rows = gridRows(html);
   if (!rows) return null;
   const headers = rows[0].map(clean);
+  const skip = new Set(["בית ספר"]); // truncated school name, no information
   const lines = rows
     .slice(1)
     .map((row) =>
       row
         .map((cell, i) => [headers[i], clean(cell)] as const)
-        .filter(([h, v]) => v && h)
+        .filter(([h, v]) => v && h && !skip.has(h))
         .map(([h, v]) => `${h}: ${v}`)
         .join("; "),
     )
@@ -298,7 +300,7 @@ export function parseGradeCards(html: string): GradeRow[] {
     const course = clean(card.querySelector("h2.pagetitle")?.text ?? "") || ranges[0] || "";
     if (!course) continue;
     const meta = ranges.find((r) => /מועד|נקודות/.test(r)) ?? "";
-    const component = ranges.find((r, i) => i > 0 && r !== meta && r !== course) ?? "";
+    const component = (ranges.find((r, i) => i > 0 && r !== meta && r !== course) ?? "").replace(/^[-–\s]+/, "");
     const gradeLine = card.querySelectorAll("strong").map((e) => clean(e.text)).find((t) => t.includes("ציון"));
     rows.push({
       course,

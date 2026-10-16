@@ -224,7 +224,11 @@ export function startMockReichman(
       if (body.get("SAMLResponse") !== "panopto-ok") return send(400, "bad");
       const sid = crypto.randomUUID();
       panoptoSessions.add(sid);
-      return redirect("/Panopto/Pages/Home.aspx", { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/Panopto` });
+      // Live behaviour: Panopto stays on Login.aspx and shows the signed-in user, inside an
+      // ASP.NET form with only hidden fields (which must NOT be treated as an auto-post step).
+      return send(200, `<html><body><form method="post" action="Login.aspx"><input type="hidden" name="__VIEWSTATE" value="vs">
+        <p>Provider: unified</p><a href="javascript:__doPostBack('ctl00$PageContentPlaceholder$loginControl$Logout','')">Sign out</a></form></body></html>`,
+        { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/Panopto` });
     }
     if (url.pathname === "/Panopto/Pages/Home.aspx") return send(200, "<html><body>Panopto home</body></html>");
     if (url.pathname === "/Panopto/Services/Data.svc/GetSessions" && req.method === "POST") {
@@ -312,7 +316,7 @@ export function startMockReichman(
           const all = body.get("R1C1") === "-1";
           return send(200, `<html><body>${card("77 אלגוריתמים", "שיעור", "1", "95")}${card("77 אלגוריתמים", "תרגול", "1", "88")}${
             all ? card("52 חשבון אינפיניטיסמלי א'", "שיעור", "2", "81") : ""
-          }${card("109 מבוא להסתברות", "שיעור", "1", "טרם")}</body></html>`);
+          }${card("109 מבוא להסתברות", "שיעור", "1", "טרם")}${card("5400 יזמות פינטק", "- סדנה", "1", "טרם")}</body></html>`);
         }
         if (code === "16") {
           if (body.get("R1C2") === "0") return send(200, `<html><body><main>לא מוגדרת מערכת שעות לתחום שנבחר</main></body></html>`);
@@ -320,15 +324,16 @@ export function startMockReichman(
             ["", "יום ראשון", "יום שני", "יום שלישי"],
             ["08:45", "", "109-מבוא להסתברות שיעור מר נוביק עמית אולם H1 08:45-11:15", ""],
             ["09:45", "", "המשך מבוא להסתברות", "3030-תכנות מתקדם תרגול מר קריב אביעד SL302 09:45-11:15"],
+            ["14:30", "", "669-הרצאת אורח-מדעי המחשב שיעור\n\nC.L05 אודיטוריום צ'ייס 14:30-15:30", ""],
           ])}</body></html>`);
         }
       }
       if (prg === "HADPASAT_TOCHNIT_BEHINOT" && body.get("ARGUMENTS") === "TZ,Token,R1C1,R1C2,R1C3") {
         if (body.get("Token") !== "tok-6") return send(200, "<html><body>bad token</body></html>");
         return send(200, `<html><body>${grid([
-          ["מועד", "קוד קורס", "שם קורס", "תאריך", "שעת התחלה", "חדר בחינה"],
-          ["1", "77", "אלגוריתמים", "25/01/2027", "09:45", "טרם נקבע"],
-          ["2", "77", "אלגוריתמים", "20/02/2027", "09:45", "טרם נקבע"],
+          ["מועד", "קוד קורס", "שם קורס", "בית ספר", "תאריך", "שעת התחלה", "חדר בחינה"],
+          ["1", "77", "אלגוריתמים", "בית ספ", "25/01/2027", "09:45", "טרם נקבע"],
+          ["2", "77", "אלגוריתמים", "בית ספ", "20/02/2027", "09:45", "טרם נקבע"],
         ])}</body></html>`);
       }
       return send(200, "<html><body>unknown query</body></html>");

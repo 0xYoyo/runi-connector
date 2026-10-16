@@ -134,6 +134,7 @@ async function main() {
     if (error instanceof LoginError && error.code === "mfa_required") {
       return new Error("Reichman asked for a second verification step, which the connector can't do yet.");
     }
+    if (error instanceof LoginError) return new Error(`Signing in to Reichman didn't complete (${error.message}). Try again in a minute.`);
     return new Error(`Couldn't reach Reichman right now (${(error as Error).message}). Check the internet connection and try again.`);
   }
 

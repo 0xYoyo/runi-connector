@@ -70,6 +70,7 @@ describe("Student Info Station", () => {
       "77 אלגוריתמים|תרגול|1|88",
       "52 חשבון אינפיניטיסמלי א'|שיעור|2|81",
       "109 מבוא להסתברות|שיעור|1|טרם",
+      "5400 יזמות פינטק|סדנה|1|טרם",
     ]);
     expect(selection.years).toEqual(["2027", "2026"]);
   });
@@ -82,6 +83,7 @@ describe("Student Info Station", () => {
     expect(data).toContain("יום שני:\n  - 109-מבוא להסתברות");
     expect(data).toContain("יום שלישי:\n  - 3030-תכנות מתקדם");
     expect(data).not.toContain("המשך");
+    expect(data).toContain("  - 669-הרצאת אורח-מדעי המחשב שיעור C.L05 אודיטוריום צ'ייס 14:30-15:30");
     expect(data).not.toContain("123456789");
   });
 
@@ -91,6 +93,7 @@ describe("Student Info Station", () => {
     const { data } = await michlol.examSchedule();
     expect(data).toContain("- מועד: 1; קוד קורס: 77; שם קורס: אלגוריתמים; תאריך: 25/01/2027");
     expect(data).toContain("מועד: 2");
+    expect(data).not.toContain("בית ספר");
   });
 
   it("signs in again once when the session was logged out", async () => {
@@ -101,7 +104,7 @@ describe("Student Info Station", () => {
     const expired = new Browser();
     (michlol as any).browser = expired;
     const { data: grades } = await michlol.grades();
-    expect(grades).toHaveLength(4);
+    expect(grades).toHaveLength(5);
   });
 
   it("fails clearly without a saved login", async () => {

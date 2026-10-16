@@ -71,7 +71,12 @@ export class PanoptoClient {
       creds,
       (page) => {
         const url = new URL(page.url);
-        return url.host === panoptoHost && /^\/Panopto\//i.test(url.pathname) && !/\/Auth\/Login\.aspx$/i.test(url.pathname) && !/<form[^>]*>[\s\S]*SAMLResponse|onload=["'][^"']*submit/i.test(page.text());
+        if (url.host !== panoptoHost || !/^\/Panopto\//i.test(url.pathname)) return false;
+        const html = page.text();
+        if (/SAMLResponse|onload=["'][^"']*submit/i.test(html)) return false; // still being posted back
+        // Signed in: any Panopto page other than login, or the login page showing the signed-in
+        // user (seen live: Login.aspx shows "Provider … Sign out" with a __doPostBack form).
+        return !/\/Auth\/Login\.aspx$/i.test(url.pathname) || /loginControl\$Logout|Sign out|התנתק/i.test(html);
       },
     );
   }
