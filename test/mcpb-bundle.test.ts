@@ -30,6 +30,7 @@ beforeAll(async () => {
         RUNI_USERNAME: VALID_USER.username,
         RUNI_PASSWORD: VALID_USER.password,
         MOODLE_BASE: `${mock.base}/moodle`,
+        SYLLABUS_URL: `${mock.base}/myruni/syllabigenerator/pdf/renderdocument?SectionIDC=`,
         XDG_CACHE_HOME: cache,
         APPDATA: cache,
       } as Record<string, string>,
@@ -45,7 +46,8 @@ afterAll(async () => {
 run("bundled .mcpb server (signs in itself from username+password)", () => {
   it("exposes the tools", async () => {
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(9);
+    expect(tools).toHaveLength(10);
+    expect(tools.map((t) => t.name)).toContain("forget_my_data");
     expect(tools.map((t) => t.name)).toContain("get_syllabus");
   });
 
@@ -57,6 +59,16 @@ run("bundled .mcpb server (signs in itself from username+password)", () => {
   it("reads a course PDF (bundled unpdf works)", async () => {
     const result = await client.callTool({ name: "read_course_file", arguments: { course: "77", file: "week1" } });
     expect(text(result)).toContain("BFS");
+  });
+
+  it("fetches a syllabus on demand when it isn't cached", async () => {
+    const result = await client.callTool({ name: "get_syllabus", arguments: { course: "77" } });
+    expect(text(result)).toContain("0.65");
+  });
+
+  it("forget_my_data refuses without confirmation", async () => {
+    const result = await client.callTool({ name: "forget_my_data", arguments: { confirm: false } });
+    expect(text(result)).toContain("Nothing deleted");
   });
 
   // sanity: the token the mock expects is the one the server got via login

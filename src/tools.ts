@@ -79,6 +79,8 @@ const readOnly = { readOnlyHint: true, openWorldHint: false };
 export interface BuildOptions {
   /** Called when Moodle rejects the token. Return fresh props to retry the tool once. */
   onSessionExpired?: () => Promise<UserProps>;
+  /** Downloads and caches one course's syllabus on demand (local versions only). */
+  fetchSyllabus?: (course: MoodleCourse) => Promise<void>;
 }
 
 export function buildServer(initialProps: UserProps, kv: KVNamespace, options: BuildOptions = {}): McpServer {
@@ -166,11 +168,18 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
     },
     safe(async ({ course }: { course: string }) => {
       const found = await resolveCourse(course);
-      const sectionIds = await sectionIdsForCourse(kv, found.id);
+      let sectionIds = await sectionIdsForCourse(kv, found.id);
+      const haveText = async () => {
+        for (const id of sectionIds) if (await cachedSyllabus(kv, id)) return true;
+        return false;
+      };
+      // Not cached yet: fetch it now if this host can (the desktop extension can; the hosted one can't).
+      if ((sectionIds.length === 0 || !(await haveText())) && options.fetchSyllabus) {
+        await options.fetchSyllabus(found);
+        sectionIds = await sectionIdsForCourse(kv, found.id);
+      }
       if (sectionIds.length === 0) {
-        return text(
-          `No syllabus is on file for ${found.fullname}. Either the course has no syllabus link on Moodle, or it hasn't been collected yet (reconnecting the connector collects syllabi again).`,
-        );
+        return text(`${found.fullname} has no syllabus linked on its Moodle page.`);
       }
       // Different section ids are different lecture/recitation groups of the same course;
       // their syllabi are normally identical, so return the first one we have.
@@ -182,7 +191,7 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
           return text(`Syllabus for ${found.fullname}${note}\n\n${truncate(syllabus.text)}`);
         }
       }
-      return text(`The syllabus for ${found.fullname} is linked but hasn't been downloaded yet. Reconnect the connector to fetch it.`);
+      return text(`The syllabus for ${found.fullname} is linked on Moodle but couldn't be downloaded right now. Try again in a minute.`);
     }),
   );
 
@@ -200,10 +209,10 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
       const sections = await contents(found.id);
       const out: string[] = [`${found.fullname}`];
       for (const section of sections) {
-        if (section.modules.length === 0 && !section.summary) continue;
         out.push(`\n## ${section.name || "(untitled section)"}`);
         const summary = htmlToText(section.summary);
         if (summary) out.push(summary.slice(0, 400));
+        if (section.modules.length === 0 && !summary) out.push("(nothing published here yet)");
         for (const mod of section.modules) {
           out.push(`- [${mod.modname}] ${mod.name}${mod.url ? ` (${mod.url})` : ""}`);
           for (const file of mod.contents ?? []) {

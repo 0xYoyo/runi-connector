@@ -121,3 +121,13 @@ describe("syllabus harvest", () => {
     expect(report2.alreadyCached).toBe(2);
   });
 });
+
+describe("academic year detection", () => {
+  it("uses next year's Moodle from August, this year's before", async () => {
+    const { moodleBaseCandidates } = await import("../extension/server/entry-year");
+    expect(moodleBaseCandidates(new Date("2026-10-16"))[0]).toBe("https://moodle.runi.ac.il/2027");
+    expect(moodleBaseCandidates(new Date("2027-03-01"))[0]).toBe("https://moodle.runi.ac.il/2027");
+    expect(moodleBaseCandidates(new Date("2027-08-20"))[0]).toBe("https://moodle.runi.ac.il/2028");
+    expect(moodleBaseCandidates(new Date("2026-10-16"))[1]).toBe("https://moodle.runi.ac.il/2026");
+  });
+});

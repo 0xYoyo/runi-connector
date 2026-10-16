@@ -46,6 +46,9 @@ export class MoodleClient {
     body.set("wstoken", this.token);
     body.set("wsfunction", wsfunction);
     body.set("moodlewsrestformat", "json");
+    // Apply Moodle's text filters, so bilingual names like "<span lang=he>…</span><span lang=en>…</span>"
+    // come back as one language (the user's) instead of both glued together.
+    body.set("moodlewssettingfilter", "true");
 
     const response = await this.fetchFn(`${this.baseUrl}/webservice/rest/server.php`, {
       method: "POST",
