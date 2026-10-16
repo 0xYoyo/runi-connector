@@ -24,6 +24,11 @@ It's a remote MCP server: you add it like the GitHub or Linear connector, sign i
 | `get_my_grades` | Your grade items in a course's Moodle gradebook |
 | `get_announcements` | Latest posts in a course's announcements forum |
 | `search_course_materials` | Finds activities and files by name across all courses |
+| `search_lectures` | Finds Panopto lecture/recitation recordings |
+| `get_lecture_transcript` | Reads a recording's transcript (with timestamps) |
+| `get_official_grades` | Official grades from the Student Info Station |
+| `piazza_list_classes` / `piazza_search` / `piazza_read_post` | Piazza Q&A (needs a separate Piazza login) |
+| `forget_my_data` | Deletes the course data saved on your computer |
 
 Courses can be named in Hebrew or English, by course number (`77`) or by Moodle id.
 

@@ -16,10 +16,14 @@ function cookies(req: IncomingMessage): Record<string, string> {
   );
 }
 
-async function readBody(req: IncomingMessage): Promise<URLSearchParams> {
+async function readRaw(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
-  return new URLSearchParams(Buffer.concat(chunks).toString());
+  return Buffer.concat(chunks).toString();
+}
+
+async function readBody(req: IncomingMessage): Promise<URLSearchParams> {
+  return new URLSearchParams(await readRaw(req));
 }
 
 export function minimalPdf(text: string): Buffer {
@@ -175,6 +179,79 @@ export function startMockReichman(port = 0, options: { requireMfa?: boolean } = 
       if (!(jar.MRHSession && idpSessions.has(jar.MRHSession))) return redirect("/idp/my.policy");
       const id = url.searchParams.get("SectionIDC");
       return send(200, minimalPdf(`Algorithms syllabus ${id} Final grade 0.65 E plus 0.15 max M E`), { "Content-Type": "application/pdf" });
+    }
+
+    // ---------- Panopto (auto-auth off Moodle, JSON data API, SRT transcripts) ----------
+    if (url.pathname === "/Panopto/Pages/Auth/Login.aspx") {
+      const sid = crypto.randomUUID();
+      sessions.add(sid);
+      return send(200, "<html><body>ok</body></html>", { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/` });
+    }
+    if (url.pathname === "/Panopto/Services/Data.svc/GetSessions" && req.method === "POST") {
+      const body = JSON.parse((await readRaw(req)) || "{}");
+      const q = body?.queryParameters?.query ?? "";
+      return send(
+        200,
+        JSON.stringify({
+          d: {
+            Results: [
+              {
+                SessionName: `תרגול 5 ${q}`,
+                FolderName: "Introduction to Probability-109-2027/1",
+                Duration: 3900,
+                StartTime: "/Date(1760000000000)/",
+                HasCaptions: true,
+                ViewerUrl: `${base}/Panopto/Pages/Viewer.aspx?id=rec-5`,
+                DeliveryID: "rec-5",
+              },
+            ],
+            TotalNumber: 1,
+          },
+        }),
+        { "Content-Type": "application/json" },
+      );
+    }
+    if (url.pathname === "/Panopto/Pages/Transcription/GenerateSRT.ashx") {
+      return send(
+        200,
+        "1\n00:03:12,000 --> 00:03:15,000\nנדבר על התפלגות הפעמון\n\n2\n00:03:15,000 --> 00:03:18,000\nזאת ההתפלגות הנורמלית\n",
+        { "Content-Type": "text/plain" },
+      );
+    }
+
+    // ---------- Student Info Station (Michlol) ----------
+    if (url.pathname === "/yedion/login.aspx") {
+      if (!(jar.MRHSession && idpSessions.has(jar.MRHSession))) return redirect("/idp/my.policy");
+      const sid = crypto.randomUUID();
+      sessions.add(sid);
+      return redirect("/yedion/fireflyweb.aspx", { "Set-Cookie": `YSession=${sid}; Path=/yedion` });
+    }
+    if (url.pathname === "/yedion/fireflyweb.aspx" && req.method === "POST") {
+      const body = await readBody(req);
+      const prg = body.get("PRGNAME");
+      if (prg === "MenuCall") {
+        // grades request screen
+        return send(
+          200,
+          `<html><body><form name="form" method="post" action="fireflyweb.aspx">
+            <input type="hidden" name="TZ" value="123">
+            <input type="hidden" name="Token" value="tok-abc">
+            <input type="hidden" name="QueryCode" value="13">
+            <select name="R1C1"><option value="-1">all</option></select>
+            <select name="R1C2"><option value="0">year</option></select>
+          </form></body></html>`,
+        );
+      }
+      if (prg === "StudentQueryExecution") {
+        if (body.get("Token") !== "tok-abc") return send(200, "<html><body>bad token</body></html>");
+        return send(
+          200,
+          `<html><body>
+            <div class="Box_ph"><h2 class="pagetitle">77 אלגוריתמים</h2><div class="InRange">5</div><div class="InRange">שיעור</div><div><strong>ציון: 95</strong></div></div>
+            <div class="Box_ph"><h2 class="pagetitle">109 מבוא להסתברות</h2><div class="InRange">4</div><div class="InRange">שיעור</div><div><strong>ציון: טרם</strong></div></div>
+          </body></html>`,
+        );
+      }
     }
 
     send(404, "not found");

@@ -76,11 +76,42 @@ function failure(message: string) {
 
 const readOnly = { readOnlyHint: true, openWorldHint: false };
 
+// Minimal shapes the extra services expose, so tools.ts doesn't import their modules directly.
+export interface PanoptoLike {
+  search(query: string, maxResults?: number): Promise<
+    Array<{ name: string; folder: string; durationMin: number; startedAt: string | null; hasCaptions: boolean; viewerUrl: string; deliveryId: string }>
+  >;
+  transcript(deliveryId: string): Promise<string | null>;
+  viewerLink(deliveryId: string, atSeconds?: number): string;
+}
+export interface MichlolLike {
+  grades(year?: number | "all", semester?: number): Promise<Array<{ course: string; component: string; grade: string; credits: string }>>;
+}
+export interface PiazzaLike {
+  configured: boolean;
+  classes(): Promise<Array<{ id: string; name: string; num: string; term: string }>>;
+  findClass(query: string): Promise<{ id: string; name: string; num: string } | undefined>;
+  search(classId: string, query: string): Promise<Array<{ number: number; subject: string; type: string }>>;
+  post(classId: string, postNumber: number): Promise<{ number: number; subject: string; content: string; type: string }>;
+}
+
 export interface BuildOptions {
   /** Called when Moodle rejects the token. Return fresh props to retry the tool once. */
   onSessionExpired?: () => Promise<UserProps>;
   /** Downloads and caches one course's syllabus on demand (local versions only). */
   fetchSyllabus?: (course: MoodleCourse) => Promise<void>;
+  /** Lecture recordings + transcripts (local versions only). */
+  panopto?: PanoptoLike;
+  /** Official grades from the Student Info Station (local versions only). */
+  michlol?: MichlolLike;
+  /** Piazza Q&A (local versions only; `configured` is false until the user adds Piazza login). */
+  piazza?: PiazzaLike;
+  /** Caption text compactor, injected so tools.ts stays free of the panopto module. */
+  srtToText?: (srt: string) => string;
+}
+
+function srtPlain(result: string): string {
+  return result;
 }
 
 export function buildServer(initialProps: UserProps, kv: KVNamespace, options: BuildOptions = {}): McpServer {
@@ -415,6 +446,141 @@ export function buildServer(initialProps: UserProps, kv: KVNamespace, options: B
       return text(truncate(`Matches for "${query}":\n${hits.slice(0, 80).join("\n")}`));
     }),
   );
+
+  // ---------- Panopto (lecture recordings + transcripts) ----------
+  if (options.panopto) {
+    const panopto = options.panopto;
+    const toText = options.srtToText ?? srtPlain;
+
+    server.registerTool(
+      "search_lectures",
+      {
+        title: "Search lecture recordings",
+        description:
+          "Searches Panopto recordings (lectures and recitations) by title, course or keyword. Returns titles, folders, length and a link. Use get_lecture_transcript to read what was said.",
+        inputSchema: { query: z.string().min(2).describe("e.g. 'probability recitation 5', a lecturer, or a topic") },
+        annotations: readOnly,
+      },
+      safe(async ({ query }: { query: string }) => {
+        const results = await panopto.search(query);
+        if (results.length === 0) return text(`No recordings match "${query}".`);
+        const lines = results.map((r) => {
+          const when = r.startedAt ? new Date(r.startedAt).toLocaleDateString("en-GB", { timeZone: "Asia/Jerusalem" }) : "";
+          return `- ${r.name} — ${r.folder} — ${r.durationMin} min${when ? ` — ${when}` : ""}${r.hasCaptions ? "" : " (no transcript)"}\n  id: ${r.deliveryId} — ${r.viewerUrl}`;
+        });
+        return text(truncate(`Recordings for "${query}":\n${lines.join("\n")}`));
+      }),
+    );
+
+    server.registerTool(
+      "get_lecture_transcript",
+      {
+        title: "Read a lecture transcript",
+        description:
+          "Returns the transcript of a Panopto recording (with timestamps), so you can answer questions about what was said or find a link to the right moment. Pass the recording id from search_lectures.",
+        inputSchema: { recording_id: z.string().describe("The recording id from search_lectures") },
+        annotations: readOnly,
+      },
+      safe(async ({ recording_id }: { recording_id: string }) => {
+        const srt = await panopto.transcript(recording_id);
+        if (!srt) return text("This recording has no transcript available.");
+        return text(`${panopto.viewerLink(recording_id)}\n\n${truncate(toText(srt))}`);
+      }),
+    );
+  }
+
+  // ---------- Student Info Station: official grades ----------
+  if (options.michlol) {
+    const michlol = options.michlol;
+    server.registerTool(
+      "get_official_grades",
+      {
+        title: "Official grades (Student Info Station)",
+        description:
+          "Your official grades from the Student Info Station (not the Moodle gradebook): final course grades, including 'not yet' where a grade isn't published.",
+        inputSchema: {
+          year: z.union([z.number().int(), z.literal("all")]).default("all").describe("Academic year, or 'all'"),
+          semester: z.number().int().min(0).max(6).default(0).describe("0 = whole year, 1/2 = semester"),
+        },
+        annotations: readOnly,
+      },
+      safe(async ({ year, semester }: { year: number | "all"; semester: number }) => {
+        const rows = await michlol.grades(year, semester);
+        if (rows.length === 0) return text("No grade rows found for that selection.");
+        const lines = rows.map((r) => `- ${r.course}${r.component ? ` (${r.component})` : ""}: ${r.grade || "—"}`);
+        return text(truncate(`Official grades:\n${lines.join("\n")}`));
+      }),
+    );
+  }
+
+  // ---------- Piazza ----------
+  if (options.piazza) {
+    const piazza = options.piazza;
+    const needsSetup = () =>
+      text(
+        "Piazza isn't set up. Piazza uses a separate login, so add your Piazza email and password in the extension's settings (Claude Desktop → Settings → Extensions → Reichman Courses), then try again.",
+      );
+
+    server.registerTool(
+      "piazza_list_classes",
+      {
+        title: "List my Piazza classes",
+        description: "Lists the Piazza classes you're enrolled in, with their course numbers.",
+        inputSchema: {},
+        annotations: readOnly,
+      },
+      safe(async () => {
+        if (!piazza.configured) return needsSetup();
+        const classes = await piazza.classes();
+        if (classes.length === 0) return text("No Piazza classes found on your account.");
+        return text(`Your Piazza classes:\n${classes.map((c) => `- ${c.name}${c.num ? ` (${c.num})` : ""} — ${c.term}`).join("\n")}`);
+      }),
+    );
+
+    server.registerTool(
+      "piazza_search",
+      {
+        title: "Search a Piazza class",
+        description:
+          "Searches posts in a Piazza class (questions, notes, announcements). Give the course number or name plus what to look for. Use piazza_read_post to open a result.",
+        inputSchema: {
+          course: z.string().describe("Piazza course number or name"),
+          query: z.string().min(2).describe("What to search for"),
+        },
+        annotations: readOnly,
+      },
+      safe(async ({ course, query }: { course: string; query: string }) => {
+        if (!piazza.configured) return needsSetup();
+        const cls = await piazza.findClass(course);
+        if (!cls) return text(`No Piazza class matches "${course}".`);
+        const posts = await piazza.search(cls.id, query);
+        if (posts.length === 0) return text(`Nothing in ${cls.name} matches "${query}".`);
+        return text(
+          `Posts in ${cls.name} matching "${query}":\n${posts.map((p) => `- @${p.number} [${p.type}] ${p.subject}`).join("\n")}\n\nUse piazza_read_post with the course and a post number.`,
+        );
+      }),
+    );
+
+    server.registerTool(
+      "piazza_read_post",
+      {
+        title: "Read a Piazza post",
+        description: "Reads a Piazza post (and its number) in full. Give the course and the @number from piazza_search.",
+        inputSchema: {
+          course: z.string().describe("Piazza course number or name"),
+          post_number: z.number().int().positive().describe("The @number of the post"),
+        },
+        annotations: readOnly,
+      },
+      safe(async ({ course, post_number }: { course: string; post_number: number }) => {
+        if (!piazza.configured) return needsSetup();
+        const cls = await piazza.findClass(course);
+        if (!cls) return text(`No Piazza class matches "${course}".`);
+        const post = await piazza.post(cls.id, post_number);
+        return text(truncate(`@${post.number} [${post.type}] ${post.subject}\n\n${post.content}`));
+      }),
+    );
+  }
 
   return server;
 }

@@ -2,8 +2,8 @@
   "manifest_version": "0.3",
   "name": "reichman-courses",
   "display_name": "Reichman Courses (unofficial)",
-  "version": "0.3.0",
-  "description": "Ask Claude about your own Reichman University Moodle courses: syllabi, grade formulas, deadlines, slides, grades. Unofficial, read-only, runs on your computer.",
+  "version": "0.4.0",
+  "description": "Ask Claude about your Reichman courses: Moodle, syllabi, grades, lecture recordings & transcripts, Piazza. Unofficial, read-only, runs on your computer.",
   "author": {
     "name": "0xYoyo"
   },
@@ -19,7 +19,9 @@
       ],
       "env": {
         "RUNI_USERNAME": "${user_config.username}",
-        "RUNI_PASSWORD": "${user_config.password}"
+        "RUNI_PASSWORD": "${user_config.password}",
+        "PIAZZA_EMAIL": "${user_config.piazza_email}",
+        "PIAZZA_PASSWORD": "${user_config.piazza_password}"
       }
     }
   },
@@ -36,6 +38,19 @@
       "description": "Used only to sign in to the university login page. It is stored securely by your computer and never sent anywhere except Reichman's own login.",
       "sensitive": true,
       "required": true
+    },
+    "piazza_email": {
+      "type": "string",
+      "title": "Piazza email (optional)",
+      "description": "Only if you use Piazza. It has a separate login from Reichman. Leave blank to skip Piazza.",
+      "required": false
+    },
+    "piazza_password": {
+      "type": "string",
+      "title": "Piazza password (optional)",
+      "description": "Your Piazza password. Stored securely by your computer; used only to sign in to Piazza.",
+      "sensitive": true,
+      "required": false
     }
   },
   "compatibility": {
@@ -88,6 +103,30 @@
     {
       "name": "forget_my_data",
       "description": "Delete the course data this connector saved on your computer"
+    },
+    {
+      "name": "search_lectures",
+      "description": "Search lecture recordings"
+    },
+    {
+      "name": "get_lecture_transcript",
+      "description": "Read a lecture transcript"
+    },
+    {
+      "name": "get_official_grades",
+      "description": "Official grades from the Student Info Station"
+    },
+    {
+      "name": "piazza_list_classes",
+      "description": "List your Piazza classes"
+    },
+    {
+      "name": "piazza_search",
+      "description": "Search a Piazza class"
+    },
+    {
+      "name": "piazza_read_post",
+      "description": "Read a Piazza post"
     }
   ]
 }

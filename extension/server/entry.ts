@@ -16,11 +16,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import type { Browser } from "../../src/browser";
+import { Browser } from "../../src/browser";
 import { MoodleClient, type MoodleCourse } from "../../src/moodle";
+import { MichlolClient } from "../../src/michlol";
+import { PanoptoClient, srtToText } from "../../src/panopto";
+import { PiazzaClient } from "../../src/piazza";
 import { signInToMoodle, type Credentials } from "../../src/reichman-login";
 import { DEFAULT_SYLLABUS_URL, harvestSyllabi } from "../../src/syllabi";
-import { buildServer, type UserProps } from "../../src/tools";
+import { buildServer, type MichlolLike, type PanoptoLike, type PiazzaLike, type UserProps } from "../../src/tools";
 
 import { moodleBaseCandidates } from "./entry-year";
 
@@ -126,6 +129,47 @@ async function main() {
     if (report.failures.length > 0) throw new Error(report.failures.join("; "));
   };
 
+  // Lecture recordings + Student Info Station reuse the signed-in web session (via a getter,
+  // so they always use the current browser even after a re-login).
+  const moodleYear = () => Number(session.props.moodleBase.match(/\/(\d{4})$/)?.[1] ?? new Date().getFullYear());
+  const panoptoHost = process.env.PANOPTO_HOST || undefined; // test override
+  const michlolHost = process.env.MICHLOL_HOST || undefined; // test override
+  const panopto: PanoptoLike = {
+    search: (q, n) => new PanoptoClient(session.browser, moodleYear(), panoptoHost).search(q, n),
+    transcript: (id) => new PanoptoClient(session.browser, moodleYear(), panoptoHost).transcript(id),
+    viewerLink: (id, at) => new PanoptoClient(session.browser, moodleYear(), panoptoHost).viewerLink(id, at),
+  };
+  const michlol: MichlolLike = {
+    grades: (year, sem) => new MichlolClient(session.browser, michlolHost).grades(year, sem),
+  };
+
+  // Piazza is a separate account; only expose it when the user supplied Piazza credentials.
+  const piazzaEmail = (process.env.PIAZZA_EMAIL || "").trim();
+  const piazzaPassword = process.env.PIAZZA_PASSWORD || "";
+  let piazzaClient: PiazzaClient | undefined;
+  const piazza: PiazzaLike = {
+    configured: Boolean(piazzaEmail && piazzaPassword),
+    async classes() {
+      return (await piazzaReady()).classes();
+    },
+    async findClass(q) {
+      return (await piazzaReady()).findClass(q);
+    },
+    async search(id, q) {
+      return (await piazzaReady()).search(id, q);
+    },
+    async post(id, n) {
+      return (await piazzaReady()).post(id, n);
+    },
+  };
+  async function piazzaReady(): Promise<PiazzaClient> {
+    if (!piazzaClient) {
+      piazzaClient = new PiazzaClient(new Browser());
+      await piazzaClient.login(piazzaEmail, piazzaPassword);
+    }
+    return piazzaClient;
+  }
+
   const server = buildServer(session.props, cache, {
     onSessionExpired: async () => {
       log("token expired; signing in again");
@@ -133,6 +177,10 @@ async function main() {
       return session.props;
     },
     fetchSyllabus,
+    panopto,
+    michlol,
+    piazza,
+    srtToText,
   });
 
   server.registerTool(

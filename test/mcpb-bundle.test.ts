@@ -31,6 +31,8 @@ beforeAll(async () => {
         RUNI_PASSWORD: VALID_USER.password,
         MOODLE_BASE: `${mock.base}/moodle`,
         SYLLABUS_URL: `${mock.base}/myruni/syllabigenerator/pdf/renderdocument?SectionIDC=`,
+        PANOPTO_HOST: mock.base,
+        MICHLOL_HOST: mock.base,
         XDG_CACHE_HOME: cache,
         APPDATA: cache,
       } as Record<string, string>,
@@ -46,9 +48,35 @@ afterAll(async () => {
 run("bundled .mcpb server (signs in itself from username+password)", () => {
   it("exposes the tools", async () => {
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(10);
-    expect(tools.map((t) => t.name)).toContain("forget_my_data");
-    expect(tools.map((t) => t.name)).toContain("get_syllabus");
+    const names = tools.map((t) => t.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "get_syllabus",
+        "forget_my_data",
+        "search_lectures",
+        "get_lecture_transcript",
+        "get_official_grades",
+        "piazza_list_classes",
+      ]),
+    );
+  });
+
+  it("searches Panopto lectures and reads a transcript", async () => {
+    const found = await client.callTool({ name: "search_lectures", arguments: { query: "probability" } });
+    expect(text(found)).toContain("id: rec-5");
+    const transcript = await client.callTool({ name: "get_lecture_transcript", arguments: { recording_id: "rec-5" } });
+    expect(text(transcript)).toContain("[3:12]");
+  });
+
+  it("reads official grades from the Student Info Station", async () => {
+    const result = await client.callTool({ name: "get_official_grades", arguments: { year: "all", semester: 0 } });
+    expect(text(result)).toContain("95");
+    expect(text(result)).toContain("אלגוריתמים");
+  });
+
+  it("tells the user Piazza needs setup when no Piazza login is configured", async () => {
+    const result = await client.callTool({ name: "piazza_list_classes", arguments: {} });
+    expect(text(result)).toContain("separate login");
   });
 
   it("signed in and lists courses + grades", async () => {

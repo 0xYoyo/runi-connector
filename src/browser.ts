@@ -174,29 +174,39 @@ export class Browser {
 
   async request(
     url: string,
-    init: { method?: string; body?: URLSearchParams; referer?: string } = {},
+    init: {
+      method?: string;
+      body?: URLSearchParams;
+      json?: unknown;
+      referer?: string;
+      headers?: Record<string, string>;
+    } = {},
     maxRedirects = 20,
   ): Promise<Page> {
     let currentUrl = url;
-    let method = init.method || "GET";
-    let body: URLSearchParams | undefined = init.body;
+    let method = init.method || (init.json !== undefined ? "POST" : "GET");
+    let body: string | undefined =
+      init.json !== undefined ? JSON.stringify(init.json) : init.body ? init.body.toString() : undefined;
+    let contentType: string | undefined =
+      init.json !== undefined ? "application/json" : init.body ? "application/x-www-form-urlencoded" : undefined;
 
     for (let hop = 0; hop <= maxRedirects; hop++) {
       const parsed = new URL(currentUrl);
       const headers: Record<string, string> = {
         "User-Agent": this.userAgent,
-        Accept: "text/html,application/xhtml+xml,application/pdf,*/*",
+        Accept: init.json !== undefined ? "application/json, text/plain, */*" : "text/html,application/xhtml+xml,application/pdf,*/*",
         "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
+        ...init.headers,
       };
       const cookie = this.jar.headerFor(parsed);
       if (cookie) headers.Cookie = cookie;
       if (init.referer) headers.Referer = init.referer;
-      if (body) headers["Content-Type"] = "application/x-www-form-urlencoded";
+      if (body !== undefined && contentType) headers["Content-Type"] = contentType;
 
       const response = await this.fetchFn(currentUrl, {
         method,
         headers,
-        body: body ? body.toString() : undefined,
+        body,
         redirect: "manual",
       });
 
@@ -220,6 +230,7 @@ export class Browser {
         if (response.status !== 307 && response.status !== 308) {
           method = "GET";
           body = undefined;
+          contentType = undefined;
         }
         continue;
       }
@@ -235,6 +246,27 @@ export class Browser {
       };
     }
     throw new Error(`Too many redirects starting at ${new URL(url).host}`);
+  }
+
+  /** POSTs JSON and parses a JSON reply. Throws with a short reason if the reply isn't JSON. */
+  async json<T>(url: string, payload: unknown, headers: Record<string, string> = {}): Promise<T> {
+    const page = await this.request(url, { json: payload, headers });
+    const raw = page.text();
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      const title = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim().slice(0, 80) ?? "";
+      throw new Error(`Expected data from ${new URL(page.url).host} but got a web page (HTTP ${page.status}${title ? `, "${title}"` : ""}).`);
+    }
+  }
+
+  /** Returns the value of a cookie the jar holds for a URL, if any. */
+  cookie(url: string, name: string): string | undefined {
+    const entry = this.jar
+      .headerFor(new URL(url))
+      .split("; ")
+      .find((c) => c.startsWith(`${name}=`));
+    return entry?.slice(name.length + 1);
   }
 
   submit(form: HtmlForm, overrides: Record<string, string> = {}, referer?: string): Promise<Page> {

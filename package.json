@@ -17,6 +17,7 @@
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "node-html-parser": "^9.0.4",
     "unpdf": "^1.8.1",
     "zod": "^4.6.7"
   },

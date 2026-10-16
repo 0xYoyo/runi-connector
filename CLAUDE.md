@@ -41,6 +41,14 @@ Unofficial remote MCP server (Cloudflare Worker) that lets Reichman University s
 - Same non-negotiable rules apply: password only in memory, token only in the OS-provided secure config + the local syllabus cache. Don't log the password.
 - This is the local/stdio transport, so it is NOT subject to the Reblaze block — it runs on the user's machine.
 
+## Extra services (local versions only; src/*.ts + wired in extension/server/entry.ts)
+
+- `src/panopto.ts` PanoptoClient: reuses the Moodle Browser (auto-auth via `?instance=MoodleProd{year}`). GetSessions JSON API + GenerateSRT.ashx transcripts. Tools: search_lectures, get_lecture_transcript. `srtToText` compacts captions to `[m:ss] text`.
+- `src/michlol.ts` MichlolClient: Student Info Station (yedion.runi.ac.il), same SSO via the Moodle Browser. fireflyweb.aspx POSTs: MenuCall to open a page, StudentQueryExecution to run a query. Tool: get_official_grades. MENU map holds the menu-item ids.
+- `src/piazza.ts` PiazzaClient: SEPARATE login (optional PIAZZA_EMAIL/PIAZZA_PASSWORD config). JSON-RPC. Tools: piazza_list_classes/search/read_post. NOT yet verified against a live account — mark results accordingly until tested.
+- Hosts are overridable by env (PANOPTO_HOST, MICHLOL_HOST, SYLLABUS_URL) for tests only; defaults are the real hosts.
+- Panopto/Michlol/Piazza tools are registered only when buildServer gets their BuildOptions providers, so the hosted Worker never exposes them.
+
 ## Notes
 
 - `MOODLE_BASE` is per academic year (`https://moodle.runi.ac.il/2027`); update every October.
