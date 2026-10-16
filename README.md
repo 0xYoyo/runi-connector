@@ -68,9 +68,11 @@ Courses can be named in Hebrew or English, by course number (`77`), or by Moodle
 
 Reichman doesn't offer outside apps a "Sign in with Reichman" button, and students can't generate a Moodle API token themselves. So the connector completes the normal university login for you, on your own computer.
 
-- Your password is **verified against Reichman's real login** before anything is saved, then kept in your computer's own secure storage — macOS Keychain, Windows' encrypted user storage, or a private file on other systems.
+- Your password is **verified against Reichman's real login** before anything is saved, then kept in your computer's own secure storage: macOS Keychain, Windows' encrypted user storage, or a private file on other systems. Like any saved login, it's protected from other users and other computers, not from programs you yourself run.
+- It is only ever typed into Reichman's own login pages, over HTTPS, as a form post (never in a URL); a redirect can't carry it anywhere else. The Piazza password only ever goes to piazza.com.
 - It is used only to sign in to Reichman (and Piazza, if you add it). It is never logged, never sent anywhere else, and a test asserts it never appears in any error or trace.
-- The sign-in page runs locally, loads nothing external, and is protected by a one-time key so no other program or website can drive it.
+- The sign-in page runs locally (127.0.0.1), loads nothing external, and only works with a private key stored in your user folder, so websites, other programs and other users on the computer can't drive it or impersonate it.
+- Updates come only from the npm package, checked against the registry's published checksum. Publishing requires the maintainer's two-factor sign-in or this repository's release workflow.
 - Everything is read-only. `forget_my_data` erases it all.
 
 > Your Reichman password also opens email and other university systems. This tool never keeps it anywhere but your own machine, but it is unofficial — use it on your own account only, if you're comfortable with that.
@@ -115,11 +117,11 @@ Then add `<your PUBLIC_URL>/mcp` as a custom connector in Claude (Settings → C
 Run once on your own machine to confirm the flow works, whether there's a 2FA step, and how long a token lasts:
 
 ```sh
-npm run probe                              # prompts for your login, prints the token + step trace
-npm run probe -- --verify <token>          # later: is that token still valid?
+npm run probe                              # prompts for your login, prints the step trace
+npm run probe -- --verify                  # later: is a token still valid? (asks for it)
 ```
 
-The probe reads your password from a hidden prompt and never writes it anywhere.
+The probe reads your password (and tokens) from a hidden prompt and never writes them anywhere.
 
 ## Develop and test
 

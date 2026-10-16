@@ -16,9 +16,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { testOverride } from "../../src/test-mode";
 
 export const PACKAGE = "reichman-courses-connector";
-const registry = () => process.env.RUNI_REGISTRY || "https://registry.npmjs.org";
+const registry = () => testOverride("RUNI_REGISTRY") ?? "https://registry.npmjs.org";
 const SERVER_PATH_IN_PACKAGE = "package/dist/extension/server/index.js";
 
 // "1.2.3" → compares numerically so 1.10.0 > 1.9.0.
@@ -114,6 +115,7 @@ export async function downloadLatest(dataDir: string, current: string, timeoutMs
     const res = await fetchWithTimeout(dist.tarball, timeoutMs);
     if (!res.ok) return null;
     const tgz = Buffer.from(await res.arrayBuffer());
+    if (tgz.length > 20_000_000) throw new Error("package too large");
     if (createHash("sha512").update(tgz).digest("base64") !== integrity) throw new Error("integrity mismatch");
     const server = extractFromTar(gunzipSync(tgz), SERVER_PATH_IN_PACKAGE);
     if (!server || server.length < 1000) throw new Error("package has no server file");
@@ -132,7 +134,7 @@ export async function downloadLatest(dataDir: string, current: string, timeoutMs
     for (const v of old) for (const f of [serverFile, startedMarker, okMarker, badMarker]) rmSync(f(dataDir, v), { force: true });
     return version;
   } catch (error) {
-    if ((error as Error).message === "integrity mismatch" || (error as Error).message.startsWith("package has")) throw error;
+    if ((error as Error).message === "integrity mismatch" || (error as Error).message.startsWith("package ")) throw error;
     return null;
   }
 }

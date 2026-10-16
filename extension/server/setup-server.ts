@@ -3,7 +3,7 @@
 // so that other local programs or websites can't drive it.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -35,13 +35,20 @@ async function readJson(req: IncomingMessage): Promise<any> {
 const DEFAULT_PORT = 51547;
 const APP_ID = "reichman-courses-connector";
 
-// Is the server on this port one of ours (another connector process)?
-async function isOurs(port: number): Promise<boolean> {
+const proof = (nonce: string, challenge: string) => createHmac("sha256", nonce).update(`${APP_ID}:${challenge}`).digest("hex");
+
+// Is the server on this port really another connector process of this user? It must prove it
+// knows the key in the user's private setup-key file (another program or another user on the
+// machine can't), so a look-alike squatting the port never gets sent the sign-in link.
+async function isOurs(port: number, nonce: string): Promise<boolean> {
   try {
+    const challenge = randomBytes(16).toString("hex");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1500);
-    const res = await fetch(`http://127.0.0.1:${port}/__runi`, { signal: controller.signal }).finally(() => clearTimeout(timer));
-    return ((await res.json()) as { app?: string }).app === APP_ID;
+    const res = await fetch(`http://127.0.0.1:${port}/__runi?c=${challenge}`, { signal: controller.signal }).finally(() => clearTimeout(timer));
+    const answer = ((await res.json()) as { proof?: string }).proof ?? "";
+    const expected = proof(nonce, challenge);
+    return answer.length === expected.length && timingSafeEqual(Buffer.from(answer), Buffer.from(expected));
   } catch {
     return false;
   }
@@ -58,9 +65,15 @@ function sharedNonce(): string {
     /* create below */
   }
   const fresh = randomBytes(16).toString("hex");
-  mkdirSync(dataDir(), { recursive: true });
+  mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
   writeFileSync(path, fresh, { mode: 0o600 });
   return fresh;
+}
+
+/** Replaces the shared key, so previously opened or copied sign-in links stop working. */
+export function rotateSetupKey() {
+  mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
+  writeFileSync(join(dataDir(), "setup-key"), randomBytes(16).toString("hex"), { mode: 0o600 });
 }
 
 const MESSAGE_PAGE = (title: string, text: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -99,7 +112,7 @@ export class SetupServer {
     this.nonce = sharedNonce();
     const wanted = process.env.RUNI_SETUP_PORT !== undefined ? Number(process.env.RUNI_SETUP_PORT) : DEFAULT_PORT;
     if (await this.listen(wanted)) return this.url();
-    if (await isOurs(wanted)) {
+    if (await isOurs(wanted, this.nonce)) {
       // Another connector process serves the page; take over if it exits.
       this.port = wanted;
       this.retry = setInterval(() => void this.listen(wanted).then((ok) => ok && clearInterval(this.retry)), 2000);
@@ -114,7 +127,7 @@ export class SetupServer {
   /** Makes sure someone serves the page right now (taking over if the old owner exited). */
   async ensureServing(): Promise<string> {
     await this.start();
-    if (this.server || (await isOurs(this.port))) return this.url();
+    if (this.server || (await isOurs(this.port, this.nonce))) return this.url();
     if (await this.listen(this.port)) {
       clearInterval(this.retry);
       return this.url();
@@ -143,6 +156,7 @@ export class SetupServer {
   }
 
   url(): string {
+    this.nonce = sharedNonce(); // picks up a rotated key
     return `http://127.0.0.1:${this.port}/?k=${this.nonce}`;
   }
 
@@ -165,9 +179,20 @@ export class SetupServer {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse) {
+    this.nonce = sharedNonce(); // the key may have been rotated (forget_my_data)
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
-    if (req.method === "GET" && url.pathname === "/__runi") return this.send(res, 200, JSON.stringify({ app: APP_ID }));
+    // Only answer requests addressed to us by IP: blocks DNS-rebinding sites (evil.com → 127.0.0.1).
+    if (req.headers.host !== `127.0.0.1:${this.port}`) {
+      req.resume();
+      return this.send(res, 421, "Misdirected request", "text/plain");
+    }
+
+    if (req.method === "GET" && url.pathname === "/__runi") {
+      const challenge = url.searchParams.get("c") ?? "";
+      if (!/^[0-9a-f]{32}$/.test(challenge)) return this.send(res, 400, "{}");
+      return this.send(res, 200, JSON.stringify({ proof: proof(this.nonce, challenge) }));
+    }
 
     if (req.method === "GET" && url.pathname === "/") {
       // The page only renders for someone who opened the real link (carries the nonce).
@@ -235,7 +260,7 @@ export function openOnce(url: string, windowMs = 5 * 60_000): boolean {
     /* never opened */
   }
   try {
-    mkdirSync(dataDir(), { recursive: true });
+    mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
     writeFileSync(marker, String(Date.now()), { mode: 0o600 });
   } catch {
     /* best effort */
@@ -251,7 +276,7 @@ export function openInBrowser(url: string) {
     platform() === "darwin"
       ? ["open", [url]]
       : platform() === "win32"
-        ? ["cmd", ["/c", "start", "", url]]
+        ? ["rundll32", ["url.dll,FileProtocolHandler", url]] // no shell, so no command parsing of the URL
         : ["xdg-open", [url]];
   try {
     spawn(cmd, args, { stdio: "ignore", detached: true }).unref();

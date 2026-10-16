@@ -2,7 +2,8 @@
 // collects a Moodle mobile-app token. The password is only held in memory for the
 // duration of this function; nothing here stores it.
 
-import { Browser, parseForms, type FetchFn, type HtmlForm, type Page } from "./browser";
+import { testMode } from "./test-mode";
+import { Browser, isLoopback, parseForms, type FetchFn, type HtmlForm, type Page } from "./browser";
 
 export interface Credentials {
   username: string;
@@ -23,13 +24,26 @@ export class LoginError extends Error {
 
 // Only ever type the Reichman password into Reichman's own login pages (and the local test server).
 export function isReichmanHost(hostname: string): boolean {
-  return hostname === "runi.ac.il" || hostname.endsWith(".runi.ac.il") || hostname === "127.0.0.1" || hostname === "localhost";
+  if (testMode() && isLoopback(hostname)) return true; // the local fake Reichman in tests
+  return hostname === "runi.ac.il" || hostname.endsWith(".runi.ac.il");
+}
+
+// The password only goes into a Reichman page, over HTTPS, as a POST (never in a URL).
+function safeToTypePassword(pageUrl: string, form: HtmlForm): boolean {
+  const page = new URL(pageUrl);
+  const action = new URL(form.action);
+  const secure = (u: URL) => u.protocol === "https:" || (testMode() && isLoopback(u.hostname));
+  return form.method === "POST" && isReichmanHost(page.hostname) && isReichmanHost(action.hostname) && secure(page) && secure(action);
 }
 
 export interface LoginResult {
   moodleToken: string;
   browser: Browser; // still holds the Moodle and My RUNI session cookies
 }
+
+// The text Reichman shows for a wrong username or password ("one or more of the details you
+// entered are wrong"), plus common English equivalents.
+export const WRONG_DETAILS = /פרטי ההזדהות שמסרת שגויים|שם משתמש או סיסמה שגויים|(username|password|credentials)[^.<]{0,40}(incorrect|invalid|wrong)|(incorrect|invalid|wrong)[^.<]{0,20}(username|password|credentials)/i;
 
 const MFA_FIELD = /otp|passcode|verification|one.?time|2fa|mfa|sms|authcode|token_?code/i;
 const USERNAME_FIELD = /user|login|email|mail|uid|name|id/i;
@@ -127,8 +141,8 @@ export async function navigateThroughLogin(
       // Asked for the password again right after sending it: it was wrong. Never send it twice
       // (repeated attempts can lock the account).
       if (passwordHost) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
-      if (!isReichmanHost(host) || !isReichmanHost(new URL(passwordForm.action).hostname)) {
-        throw new LoginError("unexpected_page", `${host} asked for a password, but it isn't a Reichman login page.`);
+      if (!safeToTypePassword(page.url, passwordForm)) {
+        throw new LoginError("unexpected_page", `${host} asked for a password, but it isn't a secure Reichman login page, so it wasn't sent.`);
       }
       passwordHost = host;
       page = await browser.submit(passwordForm, fillLoginForm(passwordForm, credentials), page.url);
@@ -154,9 +168,11 @@ export async function navigateThroughLogin(
       continue;
     }
 
-    // A dead end on the login server right after the password went in is how it says "wrong
-    // password" (e.g. an "access denied" page with no form).
-    if (passwordHost === host) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
+    // Reichman's own "wrong details" page (seen live 2026-10-16 with a made-up username: it lands
+    // on auth.runi.ac.il/vdesk/hangup.php3, "Reichman University - Logout"). Only this message
+    // counts as a wrong password; any other dead end is reported as an error and the saved
+    // password is NOT marked as rejected.
+    if (passwordHost && WRONG_DETAILS.test(html)) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
     throw new LoginError(
       "unexpected_page",
       `Stopped at an unexpected page (${new URL(page.url).host}${new URL(page.url).pathname}, "${pageTitle(html)}", HTTP ${page.status}).`,

@@ -8,6 +8,7 @@
 // Read-only: list classes, read the feed, read a post, search.
 
 import { parseForms, type Browser } from "./browser";
+import { testMode } from "./test-mode";
 
 export const PIAZZA_HOST = "https://piazza.com";
 
@@ -81,6 +82,12 @@ export class PiazzaClient {
     const page = await this.browser.request(`${this.base}/account/login`);
     const form = parseForms(page.text(), page.url).find((f) => f.inputs.some((i) => i.type === "password"));
     if (!form) throw new PiazzaError("Piazza's sign-in page didn't load as expected. Try again later.");
+    // The Piazza password only ever goes to Piazza itself, over HTTPS, as a POST.
+    const origin = new URL(this.base).origin;
+    const secure = new URL(this.base).protocol === "https:" || testMode();
+    if (new URL(page.url).origin !== origin || new URL(form.action).origin !== origin || form.method !== "POST" || !secure) {
+      throw new PiazzaError("Piazza's sign-in page isn't where it should be, so the password wasn't sent.");
+    }
     const passwordField = form.inputs.find((i) => i.type === "password")!.name;
     const emailField = form.inputs.find((i) => /mail/i.test(i.name))?.name ?? "email";
     const result = await this.browser.submit(form, { [emailField]: email, [passwordField]: password, remember: "on" }, page.url);

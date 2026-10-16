@@ -44,6 +44,13 @@ describe("wrong Reichman password", () => {
     expect(attemptsWith(wrong)).toBe(1);
   });
 
+  it("an unrelated dead end after the password is an error, NOT a wrong password", async () => {
+    const { navigateThroughLogin } = await import("../src/reichman-login");
+    const error = await navigateThroughLogin(new Browser(), `${base}/trap/start`, VALID_USER, () => false).catch((e) => e);
+    expect(error).toBeInstanceOf(LoginError);
+    expect(error.code).toBe("unexpected_page");
+  });
+
   it("only treats Reichman hosts as places to type the Reichman password", () => {
     expect(isReichmanHost("my.runi.ac.il")).toBe(true);
     expect(isReichmanHost("auth.runi.ac.il")).toBe(true);

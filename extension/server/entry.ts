@@ -23,8 +23,9 @@ import { LoginError, signInToMoodle, type Credentials } from "../../src/reichman
 import { DEFAULT_SYLLABUS_URL, harvestSyllabi } from "../../src/syllabi";
 import { buildServer, NotConnectedError, type MichlolLike, type PanoptoLike, type PiazzaLike, type UserProps } from "../../src/tools";
 import { moodleBaseCandidates } from "./entry-year";
+import { testOverride } from "../../src/test-mode";
 import { clearCredentials, dataDir, loadCredentials, saveCredentials } from "./credentials";
-import { openInBrowser, openOnce, SetupServer } from "./setup-server";
+import { openInBrowser, openOnce, rotateSetupKey, SetupServer } from "./setup-server";
 import { downloadLatest, markHealthy, markStarting, pickDownloadedVersion, runningVersion } from "./updates";
 
 const log = (...parts: unknown[]) => console.error("[reichman]", ...parts); // stdout is the MCP channel
@@ -47,7 +48,7 @@ function fileCache(): KVNamespace {
     },
     async put(key: string, value: string) {
       data[key] = value;
-      mkdirSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
       writeFileSync(path, JSON.stringify(data), { mode: 0o600 });
     },
   } as unknown as KVNamespace;
@@ -157,10 +158,10 @@ async function main() {
   // Reuses the current session if there is one (or one being made), else signs in.
   const ensureReichman = (): Promise<UserProps> => (ref.session ? Promise.resolve(ref.session.props) : connectReichman());
 
-  const piazzaHost = process.env.PIAZZA_HOST || undefined;
+  const piazzaHost = testOverride("PIAZZA_HOST");
   const moodleYear = () => Number(ref.session?.props.moodleBase.match(/\/(\d{4})$/)?.[1] ?? new Date().getFullYear());
-  const panoptoHost = process.env.PANOPTO_HOST || undefined;
-  const michlolHost = process.env.MICHLOL_HOST || undefined;
+  const panoptoHost = testOverride("PANOPTO_HOST");
+  const michlolHost = testOverride("MICHLOL_HOST");
   const needBrowser = (): Browser => {
     if (!ref.session) throw new Error("Not connected to Reichman.");
     return ref.session.browser;
@@ -255,7 +256,7 @@ async function main() {
 
   const fetchSyllabus = async (course: MoodleCourse) => {
     const attempt = () =>
-      harvestSyllabi(cache, needBrowser(), ref.session!.props.moodleBase, [course], reichmanCreds() ?? { username: "", password: "" }, process.env.SYLLABUS_URL || DEFAULT_SYLLABUS_URL);
+      harvestSyllabi(cache, needBrowser(), ref.session!.props.moodleBase, [course], reichmanCreds() ?? { username: "", password: "" }, testOverride("SYLLABUS_URL") ?? DEFAULT_SYLLABUS_URL);
     let report = await attempt();
     if (report.failures.length > 0) {
       await connectReichman();
@@ -348,6 +349,7 @@ async function main() {
       if (!confirm) return { content: [{ type: "text" as const, text: "Nothing deleted. Ask the user to confirm first." }] };
       clearCredentials();
       rmSync(join(dataDir(), "syllabi.json"), { force: true });
+      rotateSetupKey(); // old sign-in links stop working
       ref.session = null;
       piazzaClient = undefined;
       return { content: [{ type: "text" as const, text: "Deleted your saved logins and cached course data. Use connect_account to sign in again." }] };

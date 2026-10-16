@@ -17,8 +17,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -32,7 +32,7 @@ jobs:
           echo "version=$LOCAL" >> "$GITHUB_OUTPUT"
           if [ "$LOCAL" != "$PUBLISHED" ]; then echo "release=true" >> "$GITHUB_OUTPUT"; fi
       - if: steps.check.outputs.release == 'true'
-        run: npm install -g npm@latest # trusted publishing needs npm 11.5.1+
+        run: npm install -g npm@11.6.2 # trusted publishing needs npm 11.5.1+; pinned
       - if: steps.check.outputs.release == 'true'
         run: npm ci
       - if: steps.check.outputs.release == 'true'
@@ -41,7 +41,7 @@ jobs:
         run: npm run test:ext && npm test
       - if: steps.check.outputs.release == 'true'
         name: GitHub Release with the installer attached
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ steps.check.outputs.version }}
           files: dist/reichman-courses.mcpb

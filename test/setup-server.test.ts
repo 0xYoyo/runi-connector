@@ -16,7 +16,7 @@ beforeEach(async () => {
   process.env.RUNI_CREDENTIALS_BACKEND = "file";
   process.env.RUNI_SETUP_PORT = "0";
   server = new SetupServer({
-    verifyReichman: async (u, p) => (u === "yoav.zrihan" && p === "right" ? { ok: true, name: "Yoav" } : { ok: false, error: "nope" }),
+    verifyReichman: async (u, p) => (u === "first.last" && p === "right" ? { ok: true, name: "Yoav" } : { ok: false, error: "nope" }),
     verifyPiazza: async (_e, p) => (p === "right" ? { ok: true } : { ok: false, error: "nope" }),
     onChange: () => {},
   });
@@ -42,22 +42,22 @@ describe("setup server", () => {
   });
 
   it("rejects posts without the nonce header (blocks other local sites)", async () => {
-    const r = await post("/verify-reichman", { username: "yoav.zrihan", password: "right" });
+    const r = await post("/verify-reichman", { username: "first.last", password: "right" });
     expect(r.status).toBe(403);
     expect(loadCredentials().reichman).toBeUndefined();
   });
 
   it("rejects wrong credentials and saves nothing", async () => {
-    const r = await post("/verify-reichman", { username: "yoav.zrihan", password: "WRONG" }, { "X-Setup-Nonce": nonce });
+    const r = await post("/verify-reichman", { username: "first.last", password: "WRONG" }, { "X-Setup-Nonce": nonce });
     expect(((await r.json()) as { ok: boolean }).ok).toBe(false);
     expect(loadCredentials().reichman).toBeUndefined();
   });
 
   it("verifies and saves correct credentials to the store", async () => {
-    const r = await post("/verify-reichman", { username: "yoav.zrihan", password: "right" }, { "X-Setup-Nonce": nonce });
+    const r = await post("/verify-reichman", { username: "first.last", password: "right" }, { "X-Setup-Nonce": nonce });
     const data = (await r.json()) as { ok: boolean; name?: string };
     expect(data).toEqual({ ok: true, name: "Yoav" });
-    expect(loadCredentials().reichman).toEqual({ username: "yoav.zrihan", password: "right" });
+    expect(loadCredentials().reichman).toEqual({ username: "first.last", password: "right" });
     // stored as hex, not plaintext JSON
     const raw = readFileSync(join(dir, "credentials.hex"), "utf8");
     expect(raw).not.toContain("right");
@@ -65,11 +65,11 @@ describe("setup server", () => {
   });
 
   it("saves Piazza alongside Reichman", async () => {
-    await post("/verify-reichman", { username: "yoav.zrihan", password: "right" }, { "X-Setup-Nonce": nonce });
-    await post("/verify-piazza", { email: "yoav.zrihan@post.runi.ac.il", password: "right" }, { "X-Setup-Nonce": nonce });
+    await post("/verify-reichman", { username: "first.last", password: "right" }, { "X-Setup-Nonce": nonce });
+    await post("/verify-piazza", { email: "first.last@post.runi.ac.il", password: "right" }, { "X-Setup-Nonce": nonce });
     const creds = loadCredentials();
-    expect(creds.reichman?.username).toBe("yoav.zrihan");
-    expect(creds.piazza?.email).toBe("yoav.zrihan@post.runi.ac.il");
+    expect(creds.reichman?.username).toBe("first.last");
+    expect(creds.piazza?.email).toBe("first.last@post.runi.ac.il");
   });
 
   it("the page carries no plaintext secrets and loads nothing external", async () => {

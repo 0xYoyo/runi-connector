@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 export const VALID_USER = { username: "student1", password: "correct-horse" };
 export const VALID_PIAZZA = { email: "student1@post.runi.ac.il", password: "piazza-pass" };
-export const MOODLE_TOKEN = "0123456789abcdef0123456789abcdef";
+export const MOODLE_TOKEN = "0123456789abcdef0123456789abcdef"; // gitleaks:allow (fake test token)
 
 function cookies(req: IncomingMessage): Record<string, string> {
   return Object.fromEntries(
@@ -58,8 +58,10 @@ ${error ? `<p class="err">${error}</p>` : ""}
   <input type="submit" value="Login">
 </form></body></html>`;
 
-const DENIED_PAGE = `<!doctype html><html><head><title>Reichman University - access denied</title></head><body>
-<p>Your session could not be established.</p><a href="/">Click here to continue</a></body></html>`;
+// Reichman's real wrong-password page (live: auth.runi.ac.il/vdesk/hangup.php3).
+const DENIED_PAGE = `<!doctype html><html><head><title>Reichman University - Logout</title></head><body>
+<p>אוניברסיטת רייכמן - התחברות</p><p>אחד או יותר מפרטי ההזדהות שמסרת שגויים.</p>
+<p>כדי להתחיל פעילות מחדש, בבקשה לחץ כאן להמשך</p><a href="/">לחץ כאן להמשך</a></body></html>`;
 
 // The page My RUNI shows when a session is gone (seen live).
 const LOGGED_OUT_PAGE = `<!doctype html><html><head><title>Reichman University</title></head><body>
@@ -330,6 +332,13 @@ export function startMockReichman(
         ])}</body></html>`);
       }
       return send(200, "<html><body>unknown query</body></html>");
+    }
+
+    // A login that accepts the right password but then dead-ends on an unrelated error page
+    // (like My RUNI's "access not found"). Must NOT be read as a wrong password.
+    if (url.pathname === "/trap/start") return send(200, loginForm().replace("/idp/my.policy", "/trap/login"));
+    if (url.pathname === "/trap/login" && req.method === "POST") {
+      return send(200, `<html><head><title>IDC-Herzliya - access not found</title></head><body><p>לצערנו משהו השתבש...</p><a href="/">לחצו כאן להתחברות מחדש</a></body></html>`);
     }
 
     // ---------- Piazza (separate account; form login + JSON-RPC with a CSRF-Token header) ----------

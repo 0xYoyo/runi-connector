@@ -2,6 +2,8 @@
 // It keeps cookies, follows redirects by hand (so we can see every Location header,
 // including the final moodlemobile:// one), and can read and submit HTML forms.
 
+import { testMode } from "./test-mode";
+
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
 interface StoredCookie {
@@ -200,7 +202,8 @@ export class Browser {
       };
       const cookie = this.jar.headerFor(parsed);
       if (cookie) headers.Cookie = cookie;
-      if (init.referer) headers.Referer = init.referer;
+      // Never leak a query string (it can hold tokens) through Referer.
+      if (init.referer) headers.Referer = init.referer.split(/[?#]/)[0];
       if (body !== undefined && contentType) headers["Content-Type"] = contentType;
 
       const response = await this.fetchFn(currentUrl, {
@@ -225,7 +228,15 @@ export class Browser {
             customSchemeRedirect: location,
           };
         }
-        currentUrl = new URL(location, currentUrl).toString();
+        const next = new URL(location, currentUrl);
+        // 307/308 resend the form body. Only allow that to the same origin over HTTPS, so a
+        // redirect can never carry a password to another site.
+        if ((response.status === 307 || response.status === 308) && body !== undefined) {
+          const sameOrigin = next.origin === parsed.origin;
+          const secure = next.protocol === "https:" || (testMode() && isLoopback(next.hostname));
+          if (!sameOrigin || !secure) throw new Error(`Refused to resend form data from ${parsed.host} to ${next.host}.`);
+        }
+        currentUrl = next.toString();
         // 301/302/303 turn a POST into a GET, like browsers do.
         if (response.status !== 307 && response.status !== 308) {
           method = "GET";
@@ -286,3 +297,5 @@ function getSetCookies(headers: Headers): string[] {
   const single = headers.get("set-cookie");
   return single ? [single] : [];
 }
+
+export const isLoopback = (hostname: string) => hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";

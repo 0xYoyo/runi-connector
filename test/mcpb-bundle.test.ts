@@ -33,6 +33,7 @@ beforeAll(async () => {
         RUNI_DATA_DIR: dataDir,
         RUNI_SETUP_PORT: "0",
         RUNI_NO_SELF_UPDATE: "1",
+        RUNI_TEST_MODE: "1",
         RUNI_NO_BROWSER: "1",
         PIAZZA_HOST: mock.base,
         RUNI_CREDENTIALS_BACKEND: "file",

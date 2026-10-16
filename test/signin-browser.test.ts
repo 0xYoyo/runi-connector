@@ -32,9 +32,9 @@ describe.skipIf(!exe())("sign-in page in a real browser", () => {
     server = new SetupServer({
       verifyReichman: async (u, p) => {
         await new Promise((r) => setTimeout(r, 150));
-        return u === "yoav.zrihan" && p === PASS ? { ok: true, name: "Yoav Zrihan" } : { ok: false, error: "Reichman didn't accept that username and password." };
+        return u === "first.last" && p === PASS ? { ok: true, name: "Yoav Zrihan" } : { ok: false, error: "Reichman didn't accept that username and password." };
       },
-      verifyPiazza: async (e, p) => (e === "yoav.zrihan@post.runi.ac.il" && p === PIAZZA_PASS ? { ok: true } : { ok: false, error: "Piazza didn't accept that email and password." }),
+      verifyPiazza: async (e, p) => (e === "first.last@post.runi.ac.il" && p === PIAZZA_PASS ? { ok: true } : { ok: false, error: "Piazza didn't accept that email and password." }),
       onChange: () => {},
     });
     url = await server.start();
@@ -83,7 +83,7 @@ describe.skipIf(!exe())("sign-in page in a real browser", () => {
   it("wrong password shows an inline error, stays on the page, saves nothing", async () => {
     const page = await open();
     const before = page.url();
-    await page.fill("#r-user", "yoav.zrihan");
+    await page.fill("#r-user", "first.last");
     await page.fill("#r-pass", WRONG);
     await page.press("#r-pass", "Enter"); // Enter key, the way people actually submit
     await page.waitForSelector("#r-msg.err");
@@ -96,13 +96,13 @@ describe.skipIf(!exe())("sign-in page in a real browser", () => {
 
   it("right password advances to Piazza with the email suggested, then finishes", async () => {
     const page = await open();
-    await page.fill("#r-user", "yoav.zrihan");
+    await page.fill("#r-user", "first.last");
     await page.fill("#r-pass", PASS);
     await page.click("#r-btn");
     await page.waitForSelector("#step-piazza:not([hidden])");
-    expect(await page.inputValue("#p-email")).toBe("yoav.zrihan@post.runi.ac.il");
+    expect(await page.inputValue("#p-email")).toBe("first.last@post.runi.ac.il");
     expect(await page.inputValue("#r-pass")).toBe(""); // cleared from the DOM
-    expect(loadCredentials().reichman?.username).toBe("yoav.zrihan");
+    expect(loadCredentials().reichman?.username).toBe("first.last");
 
     await page.fill("#p-pass", "nope");
     await page.press("#p-pass", "Enter");
@@ -114,7 +114,7 @@ describe.skipIf(!exe())("sign-in page in a real browser", () => {
     await page.waitForSelector("#step-done:not([hidden])");
     expect(await page.textContent("#done-name")).toContain("Yoav Zrihan");
     expect(await page.textContent("#done-piazza")).toContain("Connected");
-    expect(loadCredentials().piazza?.email).toBe("yoav.zrihan@post.runi.ac.il");
+    expect(loadCredentials().piazza?.email).toBe("first.last@post.runi.ac.il");
     await page.close();
   });
 

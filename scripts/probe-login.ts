@@ -10,7 +10,7 @@
  *   npx tsx scripts/probe-login.ts
  *   (it prompts for username and password; nothing is written to disk)
  *
- *   npx tsx scripts/probe-login.ts --verify <token>
+ *   npx tsx scripts/probe-login.ts --verify   (asks for the token)
  *   (checks whether a token printed earlier still works — for measuring lifetime)
  *
  * The password is read from a hidden prompt and kept only in memory.
@@ -54,7 +54,8 @@ async function verify(token: string) {
 async function main() {
   const verifyFlag = process.argv.indexOf("--verify");
   if (verifyFlag !== -1) {
-    await verify(process.argv[verifyFlag + 1]);
+    // Read the token from a hidden prompt, never the command line (it would show in `ps` and shell history).
+    await verify((await ask("Moodle token to check: ", true)).trim());
     return;
   }
 
@@ -74,7 +75,7 @@ async function main() {
     const courses = await moodle.courses(site.userid);
     console.log(`✓ Signed in as ${site.fullname}; ${courses.length} courses.`);
     console.log(`\nTo test token lifetime, save the token somewhere private and later run:`);
-    console.log(`  npx tsx scripts/probe-login.ts --verify ${moodleToken}`);
+    console.log(`  npx tsx scripts/probe-login.ts --verify   (it asks for the token; this run's token isn't printed)`);
     console.log(`\nStep trace (host — path — status):`);
     for (const t of browser.trace) console.log(`  ${t.status}  ${t.method.padEnd(4)} ${t.host}${t.path}`);
   } catch (error) {

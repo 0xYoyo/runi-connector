@@ -87,7 +87,7 @@ function dpapiWrite(hex: string) {
   const script = "$p = [Console]::In.ReadToEnd().Trim(); ConvertTo-SecureString $p -AsPlainText -Force | ConvertFrom-SecureString";
   const r = powershell(script, hex);
   if (r.status !== 0 || !r.stdout.trim()) throw new Error("Couldn't encrypt the sign-in details.");
-  mkdirSync(dataDir(), { recursive: true });
+  mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
   writeFileSync(dpapiFile(), r.stdout.trim(), { mode: 0o600 });
 }
 
@@ -97,7 +97,7 @@ function fileRead(): string | null {
   return existsSync(plainFile()) ? readFileSync(plainFile(), "utf8") : null;
 }
 function fileWrite(hex: string) {
-  mkdirSync(dataDir(), { recursive: true });
+  mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
   writeFileSync(plainFile(), hex, { mode: 0o600 });
   chmodSync(plainFile(), 0o600);
 }
