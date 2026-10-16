@@ -11,7 +11,7 @@
  * to sign in to Reichman (or Piazza). They are never logged.
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { Browser } from "../../src/browser";
@@ -77,6 +77,33 @@ async function signIn(credentials: Credentials): Promise<Session> {
 }
 
 const selfUpdate = !process.env.RUNI_NO_SELF_UPDATE;
+
+// Only one connector process signs in to Reichman at a time (Claude Desktop can run several):
+// overlapping sign-ins for the same account make Reichman's gateway reload its login page.
+async function withSignInLock<T>(run: () => Promise<T>): Promise<T> {
+  const path = join(dataDir(), "signin.lock");
+  const deadline = Date.now() + 90_000;
+  mkdirSync(dataDir(), { recursive: true, mode: 0o700 });
+  let held = false;
+  while (!held && Date.now() < deadline) {
+    try {
+      closeSync(openSync(path, "wx", 0o600));
+      held = true;
+    } catch {
+      try {
+        if (Date.now() - statSync(path).mtimeMs > 60_000) rmSync(path, { force: true }); // left by a crashed process
+      } catch {
+        /* gone already */
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    if (held) rmSync(path, { force: true });
+  }
+}
 
 // If a newer, verified version was downloaded earlier, hand over to it (see updates.ts).
 // Returns true if it took over.
@@ -146,7 +173,7 @@ async function main() {
       if (!creds.reichman) throw needSignIn("No Reichman account is connected yet.");
       if (creds.reichmanRejected) throw needSignIn(REICHMAN_REJECTED, 6 * 3600_000);
       try {
-        ref.session = await signIn(creds.reichman);
+        ref.session = await withSignInLock(() => signIn(creds.reichman!));
       } catch (error) {
         throw reichmanFailure(error, creds.reichman);
       }
@@ -196,7 +223,7 @@ async function main() {
     const c = await clientsFor();
     const tried = reichmanCreds();
     try {
-      return await run(c);
+      return await withSignInLock(() => run(c));
     } catch (error) {
       if (error instanceof LoginError && tried) throw reichmanFailure(error, tried);
       throw error;
@@ -366,16 +393,19 @@ async function main() {
     if (openOnce(setup.url())) log("no account saved; opened the sign-in page");
   } else if (saved.reichmanRejected) {
     if (openOnce(setup.url(), 6 * 3600_000)) log("saved Reichman password was rejected earlier; opened the sign-in page");
-  } else {
-    connectReichman().catch((error) => log("background sign-in:", (error as Error).message));
   }
+  // No sign-in at startup: Claude Desktop may start several copies at once, and they'd all sign
+  // in together. Tools sign in on first use, one process at a time (withSignInLock).
   if (process.env.RUNI_LAUNCHED === version) markHealthy(dataDir(), version);
 
   // Fetch the next version in the background; it's used the next time the connector starts.
   if (selfUpdate) {
-    downloadLatest(dataDir(), version)
-      .then((v) => v && log(`downloaded v${v}; it will be used next time Claude starts the connector`))
-      .catch((error) => log("update download rejected:", (error as Error).message));
+    const check = () =>
+      downloadLatest(dataDir(), version)
+        .then((v) => v && log(`downloaded v${v}; it will be used next time Claude starts the connector`))
+        .catch((error) => log("update download rejected:", (error as Error).message));
+    void check();
+    setInterval(check, 6 * 3600_000).unref(); // long-running sessions pick updates up too
   }
 }
 

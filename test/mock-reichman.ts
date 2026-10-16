@@ -342,6 +342,8 @@ export function startMockReichman(
     // A login that accepts the right password but then dead-ends on an unrelated error page
     // (like My RUNI's "access not found"). Must NOT be read as a wrong password.
     if (url.pathname === "/trap/start") return send(200, loginForm().replace("/idp/my.policy", "/trap/login"));
+    if (url.pathname === "/trap2/start") return send(200, loginForm().replace("/idp/my.policy", "/trap2/login"));
+    if (url.pathname === "/trap2/login" && req.method === "POST") return send(200, loginForm()); // login page again, no error text
     if (url.pathname === "/trap/login" && req.method === "POST") {
       return send(200, `<html><head><title>IDC-Herzliya - access not found</title></head><body><p>לצערנו משהו השתבש...</p><a href="/">לחצו כאן להתחברות מחדש</a></body></html>`);
     }

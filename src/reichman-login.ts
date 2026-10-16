@@ -138,9 +138,13 @@ export async function navigateThroughLogin(
     const host = new URL(page.url).hostname;
     const passwordForm = findPasswordForm(forms);
     if (passwordForm) {
-      // Asked for the password again right after sending it: it was wrong. Never send it twice
-      // (repeated attempts can lock the account).
-      if (passwordHost) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
+      // Asked for the password again after sending it. Never send it twice (repeated attempts
+      // can lock the account). It's only a *wrong* password if Reichman says so; otherwise (e.g.
+      // the login page reloaded because two sign-ins overlapped) it's a retryable error.
+      if (passwordHost) {
+        if (WRONG_DETAILS.test(html)) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
+        throw new LoginError("unexpected_page", `Reichman showed its login page again (${host}, "${pageTitle(html)}").`, true);
+      }
       if (!safeToTypePassword(page.url, passwordForm)) {
         throw new LoginError("unexpected_page", `${host} asked for a password, but it isn't a secure Reichman login page, so it wasn't sent.`);
       }

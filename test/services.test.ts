@@ -51,6 +51,14 @@ describe("wrong Reichman password", () => {
     expect(error.code).toBe("unexpected_page");
   });
 
+  it("the login page shown again WITHOUT Reichman's error text is not a wrong password (overlapping sign-ins)", async () => {
+    const { navigateThroughLogin } = await import("../src/reichman-login");
+    const before = receivedPasswords().length;
+    const error = await navigateThroughLogin(new Browser(), `${base}/trap2/start`, VALID_USER, () => false).catch((e) => e);
+    expect(error.code).toBe("unexpected_page");
+    expect(receivedPasswords().length).toBe(before); // trap2 doesn't record, and nothing was resent
+  });
+
   it("only treats Reichman hosts as places to type the Reichman password", () => {
     expect(isReichmanHost("my.runi.ac.il")).toBe(true);
     expect(isReichmanHost("auth.runi.ac.il")).toBe(true);
