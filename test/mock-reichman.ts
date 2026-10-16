@@ -210,6 +210,14 @@ export function startMockReichman(
     // session the gateway shows a dead-end "access not found" page (seen live).
     if (url.pathname === "/Panopto/Pages/Auth/Login.aspx" && req.method === "GET") {
       if (url.searchParams.get("instance") !== "IDCPROD") return redirect("/gw/F5Networks-SSO-Req");
+      // Live: without AllowBounce, Panopto answers 200 with an ASP.NET page whose script bounces
+      // the browser on; with it, a plain redirect to the gateway.
+      if (url.searchParams.get("AllowBounce") !== "true") {
+        return send(200, `<html><body><form method="post" action="./Login.aspx?instance=IDCPROD" id="rootForm">
+          <input type="hidden" name="__EVENTTARGET" value=""><input type="hidden" name="__VIEWSTATE" value="vs">
+          <input type="hidden" name="ctl00$ScriptManagerControl" value=""></form>
+          <script>var bounceUrl = '/Panopto/Pages/Auth/Login.aspx?instance=IDCPROD&AllowBounce=true'; if (cookiesOk) window.location.href = bounceUrl;</script></body></html>`);
+      }
       return redirect("/gw/F5Networks-SSO-Req?app=panopto");
     }
     if (url.pathname === "/gw/F5Networks-SSO-Req") {

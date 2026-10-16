@@ -68,7 +68,10 @@ function findAutoPostForm(forms: HtmlForm[]): HtmlForm | undefined {
       return true;
     }
     const visible = form.inputs.filter((input) => !["hidden", "submit", "button"].includes(input.type));
-    return form.inputs.length > 0 && visible.length === 0;
+    // ASP.NET pages wrap everything in a form of hidden page-state fields; that's not an
+    // auto-submitting hand-off, and posting it back just reloads the page (seen live on Panopto).
+    const aspNetState = form.inputs.every((input) => /^__|^ctl\d*\$/.test(input.name));
+    return form.inputs.length > 0 && visible.length === 0 && !aspNetState;
   });
 }
 

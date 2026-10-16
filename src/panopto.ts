@@ -67,7 +67,9 @@ export class PanoptoClient {
       this.browser,
       // "IDCPROD" ("RUNI Account") is Panopto's Reichman sign-in. (The MoodleProd{year} providers
       // only work when launched from inside Moodle; checked live 2026-10-16.)
-      `${this.host}/Panopto/Pages/Auth/Login.aspx?instance=IDCPROD`,
+      // `AllowBounce=true` is where Panopto's own page script sends the browser; it answers with a
+      // plain HTTP redirect to the gateway, so no script has to run (checked live, signed out).
+      `${this.host}/Panopto/Pages/Auth/Login.aspx?instance=IDCPROD&AllowBounce=true`,
       creds,
       (page) => {
         const url = new URL(page.url);
