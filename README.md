@@ -22,27 +22,23 @@ To sign in again, change your login, or add Piazza later, ask Claude to **"conne
 
 **Updates are automatic.** You install once. The connector downloads new versions in the background (checked against npm's published checksum) and switches to them the next time Claude starts it. If a new version ever fails to start, it falls back to the one that worked.
 
-## Install — ChatGPT app (Codex) or Claude Code
+## Install — ChatGPT app (Codex)
 
-Needs [Node.js](https://nodejs.org) 18+. One line, no clone:
+Needs [Node.js](https://nodejs.org) (the LTS installer, once). Then, in the ChatGPT desktop app, open **Codex** and send this message:
 
-**ChatGPT app:** Settings → MCP servers → Add, choose **STDIO**, command `npx`, args `-y reichman-courses-connector`. Or add to `~/.codex/config.toml`:
+> Run `npx -y reichman-courses-connector@latest install` and tell me what it printed.
 
-```toml
-[mcp_servers.reichman]
-command = "npx"
-args = ["-y", "reichman-courses-connector"]
-```
+Codex runs it (approve when asked). It registers the connector with the ChatGPT app. Quit ChatGPT completely and reopen it. The first time you ask about your courses, the same sign-in page opens in your browser. If you already signed in from Claude on this computer, it reuses that login. Updates are automatic.
 
-**Claude Code:**
+To remove it: `npx -y reichman-courses-connector uninstall`.
+
+## Install — Claude Code
 
 ```sh
-claude mcp add --scope user reichman -- npx -y reichman-courses-connector
+claude mcp add --scope user reichman -- npx -y reichman-courses-connector@latest
 ```
 
-The first run opens the same sign-in page in your browser. Updates are automatic here too (same updater as the Claude Desktop version).
-
-Both installs run the same npm package; the .mcpb is just the double-click wrapper Claude Desktop needs, since Claude Desktop can't run an `npx` line without a terminal.
+Both installs run the same npm package; the .mcpb is just the double-click wrapper Claude Desktop needs.
 
 ## What it can do
 

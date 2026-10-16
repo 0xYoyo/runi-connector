@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "reichman-courses",
   "display_name": "Reichman Courses (unofficial)",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Ask Claude about your Reichman courses: Moodle, syllabi, grades, lecture recordings & transcripts, Piazza. Unofficial, read-only, runs on your computer.",
   "author": {
     "name": "0xYoyo"

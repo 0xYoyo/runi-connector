@@ -26,6 +26,7 @@ import { moodleBaseCandidates } from "./entry-year";
 import { testOverride } from "../../src/test-mode";
 import { clearCredentials, dataDir, loadCredentials, saveCredentials } from "./credentials";
 import { openInBrowser, openOnce, rotateSetupKey, SetupServer } from "./setup-server";
+import { runCli } from "./install";
 import { downloadLatest, markHealthy, markStarting, pickDownloadedVersion, runningVersion } from "./updates";
 
 const log = (...parts: unknown[]) => console.error("[reichman]", ...parts); // stdout is the MCP channel
@@ -409,7 +410,8 @@ async function main() {
   }
 }
 
-if (!launchDownloadedVersion()) main().catch((error) => {
+// `install` / `uninstall` (one-step setup for the ChatGPT app) run and exit; otherwise serve MCP.
+if (!runCli(process.argv, __filename) && !launchDownloadedVersion()) main().catch((error) => {
   log("fatal:", (error as Error).message);
   process.exit(1);
 });
