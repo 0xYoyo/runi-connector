@@ -22,7 +22,7 @@ It can also **submit an assignment or post in a course forum**, but never on its
 
 To sign in again, change your login, or add Piazza later, ask Claude to **"connect my Reichman account"** (the `connect_account` tool reopens the sign-in page).
 
-**Updates are automatic, with no restart.** You install once. The connector checks for new versions in the background (verified against npm's published checksum) and switches to them while Claude keeps running. If a new version ever fails to start, it stays on the one that worked.
+**Updates are manual, on purpose.** The connector never downloads or runs new code by itself. To update, download the latest `reichman-courses.mcpb` from the releases page and double-click it. Your login stays saved.
 
 ## Install — ChatGPT app (Codex)
 
@@ -30,7 +30,7 @@ Needs [Node.js](https://nodejs.org) (the LTS installer, once). Then, in the Chat
 
 > Run `npx -y reichman-courses-connector@latest install` and tell me what it printed.
 
-Codex runs it (approve when asked). It registers the connector with the ChatGPT app. Quit ChatGPT completely and reopen it. The first time you ask about your courses, the same sign-in page opens in your browser. If you already signed in from Claude on this computer, it reuses that login. Updates are automatic.
+Codex runs it (approve when asked). It registers the connector with the ChatGPT app. Quit ChatGPT completely and reopen it. The first time you ask about your courses, the same sign-in page opens in your browser. If you already signed in from Claude on this computer, it reuses that login. To update later, send the same message again.
 
 To remove it: `npx -y reichman-courses-connector uninstall`.
 
@@ -63,7 +63,7 @@ Courses can be named in Hebrew or English, by course number (`77`), or by Moodle
 - **The Moodle session or token expires:** it signs in again by itself with your saved login. You don't notice.
 - **You change your Reichman (or Piazza) password:** the next request fails once. The connector marks the saved password as outdated and **never tries it again** (repeated wrong attempts can lock your account). Then the sign-in page opens, and Claude shows you the link. Enter the new password; everything works again without a restart.
 - **You want to add Piazza later, or switch accounts:** ask Claude to *"connect my Reichman account"*. It opens the page and shows the link.
-- **A new version comes out:** it downloads in the background and switches over while Claude keeps running. No re-download, no clicks, no restart.
+- **A new version comes out:** nothing changes until you install it (double-click the new `.mcpb`, or re-run the install command). Nothing is ever downloaded automatically.
 - **You want everything gone:** ask Claude to *"forget my Reichman data"* (deletes the saved logins and cached course data), then remove the extension. Removing the extension alone doesn't delete the saved login.
 
 ## How sign-in works, and what happens to your password
@@ -74,7 +74,7 @@ Reichman doesn't offer outside apps a "Sign in with Reichman" button, and studen
 - It is only ever typed into Reichman's own login pages, over HTTPS, as a form post (never in a URL); a redirect can't carry it anywhere else. The Piazza password only ever goes to piazza.com.
 - It is used only to sign in to Reichman (and Piazza, if you add it). It is never logged, never sent anywhere else, and a test asserts it never appears in any error or trace.
 - The sign-in page runs locally (127.0.0.1), loads nothing external, and only works with a private key stored in your user folder, so websites, other programs and other users on the computer can't drive it or impersonate it.
-- Updates come only from the npm package, checked against the registry's published checksum. Publishing requires the maintainer's two-factor sign-in or this repository's release workflow.
+- No automatic updates: the connector only ever runs the version you installed. New versions are published by this repository's release workflow (npm trusted publishing, provenance attached), and you decide whether to install them.
 - Reading is the default. The only things that change anything (submitting an assignment, posting in a forum) need your explicit OK on an exact preview; each confirmation code works once and expires in 15 minutes. Files can only be submitted from inside your home folder. `forget_my_data` erases everything saved.
 
 > Your Reichman password also opens email and other university systems. This tool never keeps it anywhere but your own machine, but it is unofficial — use it on your own account only, if you're comfortable with that.
@@ -86,7 +86,7 @@ Set up once (see "First publish" below). After that, a release is:
 1. Bump `"version"` in `package.json` **and** `extension/manifest.json` (the build refuses to run if they differ).
 2. Commit and push to `main`.
 
-GitHub Actions (`.github/workflows/release.yml`) sees the new version, runs the tests, creates GitHub Release `v<version>` with the `.mcpb` attached, and publishes the npm package. No tags and no tokens: it uses npm's *trusted publishing* (GitHub's identity). Every installed connector updates itself.
+GitHub Actions (`.github/workflows/release.yml`) sees the new version, runs the tests, creates GitHub Release `v<version>` with the `.mcpb` attached, and publishes the npm package. No tags and no tokens: it uses npm's *trusted publishing* (GitHub's identity). Installed connectors don't change until each user installs the new version.
 
 ### First publish (one time)
 

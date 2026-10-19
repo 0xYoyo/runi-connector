@@ -31,8 +31,7 @@ import { testOverride } from "../../src/test-mode";
 import { clearCredentials, dataDir, loadCredentials, saveCredentials } from "./credentials";
 import { openInBrowser, openOnce, rotateSetupKey, SetupServer } from "./setup-server";
 import { runCli } from "./install";
-import { runningVersion } from "./updates";
-import { supervise } from "./supervisor";
+import { removeOldDownloads, runningVersion } from "./updates";
 
 const log = (...parts: unknown[]) => console.error("[reichman]", ...parts); // stdout is the MCP channel
 
@@ -81,8 +80,6 @@ async function signIn(credentials: Credentials): Promise<Session> {
   }
   throw lastError;
 }
-
-const selfUpdate = !process.env.RUNI_NO_SELF_UPDATE;
 
 // Only one connector process signs in to Reichman at a time (Claude Desktop can run several):
 // overlapping sign-ins for the same account make Reichman's gateway reload its login page.
@@ -185,17 +182,15 @@ async function readLocalFile(path: string): Promise<{ name: string; bytes: Uint8
   return { name: basename(real), bytes: new Uint8Array(readFileSync(real)) };
 }
 
-// How updates are going, as the launcher last wrote it (launcher-status.json in the data folder).
+// Updates are manual. An auto-updating launcher from an older install may still be running this
+// version (it sets RUNI_CHILD or RUNI_LAUNCHED): say so, so the student installs the new .mcpb.
 function updatesLine(): string {
-  try {
-    const s = JSON.parse(readFileSync(join(dataDir(), "launcher-status.json"), "utf8"));
-    return `Updates: ${s.mode ?? "?"}; launcher v${s.launcher ?? "?"}` + (s.lastCheck ? `; last check ${s.lastCheck}: ${s.lastCheckResult}` : "; no check yet");
-  } catch {
-    return "Updates: launcher status unknown";
-  }
+  return process.env.RUNI_CHILD || process.env.RUNI_LAUNCHED
+    ? "Updates: an older auto-updating install is still running this. Install the latest .mcpb once to switch auto-updates off."
+    : "Updates: manual only (nothing is downloaded or changed unless you install a new version).";
 }
 
-async function main(input?: import("node:stream").Readable) {
+async function main() {
   const cache = fileCache();
   const ref: { session: Session | null } = { session: null };
 
@@ -584,7 +579,7 @@ async function main(input?: import("node:stream").Readable) {
   );
 
   // Answer Claude right away; sign in in the background (tools wait for it if they need it).
-  await server.connect(input ? new StdioServerTransport(input, process.stdout) : new StdioServerTransport());
+  await server.connect(new StdioServerTransport());
   const version = runningVersion();
   log(`ready (v${version})`);
   const saved = loadCredentials();
@@ -597,25 +592,12 @@ async function main(input?: import("node:stream").Readable) {
   // in together. Tools sign in on first use, one process at a time (withSignInLock).
 }
 
-// `install` / `uninstall` (one-step setup for the ChatGPT app) run and exit; otherwise serve MCP.
-// Two roles, one program:
-//  - the launcher (what Claude starts): passes messages through to a child process running the
-//    real connector, and swaps in new versions while running (supervisor.ts);
-//  - the connector itself (RUNI_CHILD=1): serves the tools.
+// `install` / `uninstall` (one-step setup for the ChatGPT app / terminal) run and exit;
+// otherwise serve MCP. No automatic updates (removed in 1.7.0, by the owner's choice).
 async function start() {
   if (runCli(process.argv, __filename)) return;
-  if (process.env.RUNI_CHILD) return main();
-  const interval = Number(testOverride("RUNI_UPDATE_INTERVAL_MS")) || 30 * 60_000;
-  supervise({
-    selfPath: __filename,
-    selfVersion: runningVersion(),
-    dataDir: dataDir(),
-    log,
-    checkEveryMs: interval,
-    updates: selfUpdate,
-    runInProcess: (input) => main(input),
-    startupTimeoutMs: Number(testOverride("RUNI_STARTUP_TIMEOUT_MS")) || undefined,
-  });
+  if (!process.env.RUNI_CHILD && !process.env.RUNI_LAUNCHED) removeOldDownloads(dataDir());
+  return main();
 }
 
 start().catch((error) => {
