@@ -40,6 +40,9 @@ export class PanoptoClient {
     private readonly moodleYear: number,
     private readonly host: string = PANOPTO_HOST,
     private readonly credentials?: () => Credentials | undefined,
+    // Reichman's gateway only lets a session into Panopto if the session was started at the
+    // Student Info Station (seen live), so sign in there first, in this same browser.
+    private readonly gatewaySignIn?: (fresh?: boolean) => Promise<void>,
   ) {}
 
   // Panopto signs in through the My RUNI gateway (SAML): its login page redirects there, and the
@@ -49,13 +52,14 @@ export class PanoptoClient {
   private async ensureAuth() {
     if (this.authed) return;
     try {
+      await this.gatewaySignIn?.();
       await this.walkLogin();
     } catch (error) {
-      // My RUNI's gateway can answer "access not found" to a session it tied to another service.
-      // Start a brand-new session and try once more (the password is still sent at most once
-      // per attempt, and only to Reichman's login page).
+      // A session the gateway won't let into Panopto ("access not found" / "ACL denied"): start
+      // a brand-new one (via the Student Info Station first) and try once more.
       if (!(error instanceof LoginError) || error.code !== "unexpected_page") throw error;
       this.browser.jar.clear();
+      await this.gatewaySignIn?.(true);
       await this.walkLogin();
     }
     this.authed = true;

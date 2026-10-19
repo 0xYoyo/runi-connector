@@ -230,17 +230,23 @@ async function main() {
     return creds.reichmanRejected ? undefined : creds.reichman;
   };
 
-  // Panopto and the Student Info Station each get their OWN browser session. My RUNI's gateway
-  // ties a session to the service it was opened for and answers "access not found" if that
-  // session is reused for another one (seen live), so they never share cookies with each other
-  // or with Moodle. Each signs in once and is reused; they don't need the Moodle sign-in.
+  // Panopto and the Student Info Station share ONE gateway browser session, separate from
+  // Moodle's. Reichman's gateway only admits a session into Panopto if that session started at the
+  // Student Info Station, and a session started at Panopto is refused everywhere (seen live), so
+  // Panopto always signs in via the Student Info Station first.
   let gatewayClients: { panopto: PanoptoClient; michlol: MichlolClient } | null = null;
   const resetGatewayClients = () => (gatewayClients = null);
-  const clientsFor = () =>
-    (gatewayClients ??= {
-      panopto: new PanoptoClient(new Browser(), moodleYear(), panoptoHost, reichmanCreds),
-      michlol: new MichlolClient(new Browser(), michlolHost, reichmanCreds),
-    });
+  const clientsFor = () => {
+    if (!gatewayClients) {
+      const browser = new Browser();
+      const michlolClient = new MichlolClient(browser, michlolHost, reichmanCreds);
+      gatewayClients = {
+        michlol: michlolClient,
+        panopto: new PanoptoClient(browser, moodleYear(), panoptoHost, reichmanCreds, (fresh) => michlolClient.ensureSignedIn(fresh)),
+      };
+    }
+    return gatewayClients;
+  };
 
   // Panopto and Michlol sign in through the My RUNI gateway with the saved login; if that says
   // the password is wrong, handle it like a failed Reichman sign-in.
@@ -387,7 +393,8 @@ async function main() {
             type: "text" as const,
             text:
               `The sign-in page is opening in the user's browser. Also show them this link as a clickable link, in case the browser didn't come to the front: ${url}\n` +
-              `There they can connect or change their Reichman login and add or update Piazza. Once they're done, tools work right away (no restart).`,
+              `There they can connect or change their Reichman login and add or update Piazza. Once they're done, tools work right away (no restart).\n` +
+              `(Connector version ${runningVersion()}.)`,
           },
         ],
       };

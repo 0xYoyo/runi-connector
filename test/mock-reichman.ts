@@ -227,7 +227,11 @@ export function startMockReichman(
     if (url.pathname === "/gw/F5Networks-SSO-Req") {
       const bound = gateway.get(jar.GW ?? "");
       if (url.searchParams.get("app") === "panopto" && !bound) return redirect("/gw/my.policy?res=panopto");
-      if (url.searchParams.get("app") !== "panopto" || bound !== "panopto") return send(404, ACCESS_NOT_FOUND);
+      if (url.searchParams.get("app") !== "panopto") return send(404, ACCESS_NOT_FOUND);
+      // Seen live 2026-10-19: a session that STARTED at Panopto's SAML request signs in fine but is
+      // then refused ("BIG-IP ACL denied"); a session started at the Student Info Station (yedion)
+      // may go on to Panopto (seen in a browser 2026-10-16).
+      if (bound !== "yedion") return send(200, `<html><head><title>BIG-IP ACL denied page</title></head><body>Access denied</body></html>`);
       return send(200, `<html><body onload="document.forms[0].submit()">
         <form method="post" action="${base}/Panopto/Pages/Auth/Login.aspx"><input type="hidden" name="SAMLResponse" value="panopto-ok"><input type="hidden" name="RelayState" value="r"></form></body></html>`);
     }

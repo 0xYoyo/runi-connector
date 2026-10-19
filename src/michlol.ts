@@ -112,7 +112,8 @@ export class MichlolClient {
   // Michlol sits behind My RUNI's own gateway, which can ask for the Reichman login again even
   // when Moodle is signed in. Walk that login (Reichman pages only) until Michlol itself loads.
   /** Signs in to the Student Info Station (and with it the My RUNI gateway). */
-  ensureSignedIn(): Promise<void> {
+  ensureSignedIn(fresh = false): Promise<void> {
+    if (fresh) this.authed = false;
     return this.ensureAuth();
   }
 
