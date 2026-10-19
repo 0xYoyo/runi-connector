@@ -7,15 +7,20 @@
 // Safety nets: a new version that fails to start is marked bad and the old one keeps running; a
 // child that crashes is restarted (falling back to the built-in version if it keeps crashing).
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { Worker } from "node:worker_threads";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { PassThrough, type Readable } from "node:stream";
 import { testOverride } from "../../src/test-mode";
 import { downloadLatest, markBad, markHealthy, pickDownloadedVersion } from "./updates";
 
 type Line = string;
 
+// The connector runs in a worker thread of this process, not a separate process: Claude Desktop runs
+// extensions on its built-in Node.js (Electron), where starting another copy of the program can
+// launch the app instead of Node (1.6.0 hung on that). A worker thread behaves the same everywhere.
 interface Child {
-  proc: ChildProcess;
+  worker: Worker;
   version: string;
   file: string;
 }
@@ -67,29 +72,37 @@ export function supervise(options: SupervisorOptions) {
   const best = (): { file: string; version: string } =>
     (options.updates && pickDownloadedVersion(options.dataDir, options.selfVersion)) || { file: options.selfPath, version: options.selfVersion };
 
-  // Claude Desktop runs extensions on its own built-in Node.js (Electron). Its program only acts
-  // as Node when told so; otherwise a child would start as an app and never answer.
-  const childEnv = { ...process.env, RUNI_CHILD: "1", ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) };
-
   function start(file: string, version: string): Child {
-    // Tests can swap the program, to simulate one that hangs or can't run.
-    const proc = spawn(testOverride("RUNI_CHILD_EXEC") ?? process.execPath, [file], {
-      env: childEnv,
-      stdio: ["pipe", "pipe", "inherit"],
+    // Tests can swap the file, to simulate a version that hangs or can't load.
+    const worker = new Worker(testOverride("RUNI_CHILD_FILE") ?? file, {
+      stdin: true,
+      stdout: true,
+      stderr: false,
+      argv: [],
+      env: { ...process.env, RUNI_CHILD: "1" },
     });
-    const child: Child = { proc, version, file };
-    onLines(proc.stdout!, (line) => fromChild(child, line));
-    proc.on("exit", (code) => onChildExit(child, code));
-    proc.on("error", (error) => {
-      log(`couldn't start the connector process: ${error.message}`);
-      if (!everAnswered) fallBackInProcess();
-    });
-    proc.stdin!.on("error", () => {}); // a dying child must not take the launcher down
+    const child: Child = { worker, version, file };
+    onLines(worker.stdout, (line) => fromChild(child, line));
+    worker.on("error", (error) => log(`connector v${version} failed: ${error.message}`));
+    worker.on("exit", (code) => onChildExit(child, code));
+    worker.stdin!.on("error", () => {}); // a dying worker must not take the launcher down
     return child;
   }
 
   function send(child: Child, line: Line) {
-    child.proc.stdin!.write(line + "\n");
+    child.worker.stdin!.write(line + "\n");
+  }
+  const stop = (child: Child) => void child.worker.terminate().catch(() => {});
+
+  // What connector_status shows about updates (the worker reads it from this file).
+  const status: Record<string, unknown> = { mode: "worker", started: new Date().toISOString() };
+  function saveStatus(change: Record<string, unknown>) {
+    Object.assign(status, change);
+    try {
+      writeFileSync(join(options.dataDir, "launcher-status.json"), JSON.stringify(status), { mode: 0o600 });
+    } catch {
+      /* best effort */
+    }
   }
 
   // Until a child has answered the client's hello, keep everything the client sent, so that if
@@ -102,7 +115,8 @@ export function supervise(options: SupervisorOptions) {
     log("serving the connector in this process (child processes don't work here); updates apply at the next start");
     inProcess = new PassThrough();
     shuttingDown = true; // stop restarting children
-    current?.proc.kill();
+    if (current) stop(current);
+    saveStatus({ mode: "in-process (no live updates until the next start)" });
     for (const line of earlyLines) inProcess.write(line + "\n");
     earlyLines.length = 0;
     void options.runInProcess(inProcess);
@@ -141,7 +155,7 @@ export function supervise(options: SupervisorOptions) {
   process.stdin.on("end", () => {
     if (inProcess) return inProcess.end();
     shuttingDown = true;
-    current?.proc.kill();
+    if (current) stop(current);
     process.exit(0);
   });
 
@@ -233,7 +247,7 @@ export function supervise(options: SupervisorOptions) {
       const fresh = start(file, version);
       const ok = await handshake(fresh);
       if (!ok) {
-        fresh.proc.kill();
+        stop(fresh);
         markBad(options.dataDir, version);
         log(`v${version} didn't start; keeping v${current.version}`);
         return;
@@ -242,15 +256,16 @@ export function supervise(options: SupervisorOptions) {
       const deadline = Date.now() + 120_000;
       while (pending.size > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
       if (pending.size > 0) {
-        fresh.proc.kill();
+        stop(fresh);
         return; // busy for too long; try again at the next check
       }
       const old = current;
       current = fresh;
       markHealthy(options.dataDir, version);
       log(`switched to v${version} (was v${old.version}) without a restart`);
-      old.proc.stdin!.end();
-      setTimeout(() => old.proc.kill(), 5_000).unref();
+      old.worker.stdin!.end();
+      setTimeout(() => stop(old), 5_000).unref();
+      saveStatus({ running: version, switchedAt: new Date().toISOString() });
       // New versions can add tools: ask Claude to refresh its list.
       if (initializeLine) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" }) + "\n");
     } finally {
@@ -262,9 +277,15 @@ export function supervise(options: SupervisorOptions) {
   async function checkForUpdate() {
     lastCheck = Date.now();
     if (!options.updates) return;
-    await downloadLatest(options.dataDir, current.version).catch((error) => log("update download rejected:", (error as Error).message));
+    let result = "up to date";
+    await downloadLatest(options.dataDir, current.version).catch((error) => {
+      result = `download failed: ${(error as Error).message}`;
+      log("update download rejected:", (error as Error).message);
+    });
     const candidate = pickDownloadedVersion(options.dataDir, current.version);
-    if (candidate) await swapTo(candidate.file, candidate.version);
+    if (candidate) result = inProcess ? `v${candidate.version} downloaded; used at the next start` : `switching to v${candidate.version}`;
+    saveStatus({ lastCheck: new Date().toISOString(), lastCheckResult: result });
+    if (candidate && !inProcess) await swapTo(candidate.file, candidate.version);
   }
   // Also check when Claude uses a tool (at most every 2 minutes), so updates arrive quickly.
   async function maybeCheckForUpdate() {
@@ -277,6 +298,7 @@ export function supervise(options: SupervisorOptions) {
 
   const first = best();
   current = start(first.file, first.version);
+  saveStatus({ launcher: options.selfVersion, running: first.version });
   if (options.updates) {
     setTimeout(() => void checkForUpdate(), 3_000).unref();
     setInterval(() => void checkForUpdate(), options.checkEveryMs).unref();

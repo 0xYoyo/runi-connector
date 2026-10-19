@@ -49,7 +49,7 @@ export function pickDownloadedVersion(dataDir: string, current: string): { versi
     .sort(compareVersions)
     .reverse();
   for (const v of versions) {
-    if (existsSync(badMarker(dataDir, v))) continue;
+    if (isMarkedBad(dataDir, v)) continue;
     // Only an explicit failure (markBad) rules a version out. "Started but not yet healthy" isn't
     // one: Claude Desktop starts several copies and closes the extras within a second, which
     // used to get perfectly good versions skipped.
@@ -62,10 +62,20 @@ export function markStarting(dataDir: string, v: string) {
   if (!existsSync(okMarker(dataDir, v))) writeFileSync(startedMarker(dataDir, v), String(Date.now()), { mode: 0o600 });
 }
 
+// Launchers before 1.6.3 started versions as separate processes, which never worked inside Claude
+// Desktop, so they marked good versions bad. Only trust marks made by the worker-thread launcher.
+function isMarkedBad(dataDir: string, v: string): boolean {
+  try {
+    return JSON.parse(readFileSync(badMarker(dataDir, v), "utf8")).how === "worker";
+  } catch {
+    return false;
+  }
+}
+
 /** Never use this downloaded version again (it failed to start or kept crashing). */
 export function markBad(dataDir: string, v: string) {
   try {
-    if (existsSync(appDir(dataDir))) writeFileSync(badMarker(dataDir, v), String(Date.now()), { mode: 0o600 });
+    if (existsSync(appDir(dataDir))) writeFileSync(badMarker(dataDir, v), JSON.stringify({ at: Date.now(), how: "worker" }), { mode: 0o600 });
   } catch {
     /* best effort */
   }

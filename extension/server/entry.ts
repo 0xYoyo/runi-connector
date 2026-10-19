@@ -157,6 +157,16 @@ async function readLocalFile(path: string): Promise<{ name: string; bytes: Uint8
   return { name: basename(real), bytes: new Uint8Array(readFileSync(real)) };
 }
 
+// How updates are going, as the launcher last wrote it (launcher-status.json in the data folder).
+function updatesLine(): string {
+  try {
+    const s = JSON.parse(readFileSync(join(dataDir(), "launcher-status.json"), "utf8"));
+    return `Updates: ${s.mode ?? "?"}; launcher v${s.launcher ?? "?"}` + (s.lastCheck ? `; last check ${s.lastCheck}: ${s.lastCheckResult}` : "; no check yet");
+  } catch {
+    return "Updates: launcher status unknown";
+  }
+}
+
 async function main(input?: import("node:stream").Readable) {
   const cache = fileCache();
   const ref: { session: Session | null } = { session: null };
@@ -492,6 +502,7 @@ async function main(input?: import("node:stream").Readable) {
         `Connector version: ${runningVersion()}`,
         `Reichman: ${reichman}${ref.session ? `; Moodle signed in (${ref.session.props.moodleBase})` : ""}`,
         `Piazza: ${piazzaState}`,
+        updatesLine(),
         lastProblem ? `Last sign-in problem (${lastProblem.at}): ${lastProblem.message}` : "No sign-in problems since the connector started.",
       ];
       return { content: [{ type: "text" as const, text: lines.join("\n") }] };

@@ -1,8 +1,8 @@
-// Startup must always answer Claude, even where the launcher can't run the connector as a child
-// process (seen live 2026-10-19: Claude Desktop's built-in Node.js is Electron, and a child started
-// with it as a plain program never answered). Then the connector is served in the launcher itself.
+// Startup must always answer Claude. The launcher runs the connector in a worker thread (child
+// processes don't work under Claude Desktop's built-in Node.js, seen live 2026-10-19); if that
+// can't load, crashes, or hangs, the connector is served in the launcher itself.
 import { describe, expect, it } from "vitest";
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -12,10 +12,10 @@ import { startMockReichman, VALID_USER } from "./mock-reichman";
 const BUNDLE = join(process.cwd(), "dist", "extension", "server", "index.js");
 const run = existsSync(BUNDLE) ? describe : describe.skip;
 
+// A stand-in for the connector code the launcher loads in its worker thread.
 function script(body: string) {
-  const path = join(mkdtempSync(join(tmpdir(), "exec-")), "child.sh");
-  writeFileSync(path, `#!/bin/sh\n${body}\n`);
-  chmodSync(path, 0o755);
+  const path = join(mkdtempSync(join(tmpdir(), "child-")), "child.js");
+  writeFileSync(path, body);
   return path;
 }
 
@@ -37,7 +37,7 @@ async function startWith(childExec: string) {
         RUNI_TEST_MODE: "1",
         RUNI_NO_BROWSER: "1",
         RUNI_CREDENTIALS_BACKEND: "file",
-        RUNI_CHILD_EXEC: childExec,
+        RUNI_CHILD_FILE: childExec,
         RUNI_STARTUP_TIMEOUT_MS: "1500",
         MOODLE_BASE: `${mock.base}/moodle`,
       } as Record<string, string>,
@@ -52,20 +52,20 @@ async function startWith(childExec: string) {
 }
 
 run("startup always answers", () => {
-  it("child program can't be started → served in-process", async () => {
-    const r = await startWith("/nonexistent/node");
+  it("connector code can't be loaded → served in-process", async () => {
+    const r = await startWith("/nonexistent/server.js");
     expect(r.tools).toContain("list_courses");
     expect(r.courses).toContain("אלגוריתמים");
   });
 
-  it("child exits immediately → served in-process, quickly", async () => {
-    const r = await startWith(script("exit 1"));
+  it("connector code crashes at once → served in-process, quickly", async () => {
+    const r = await startWith(script("throw new Error('boom');"));
     expect(r.connectMs).toBeLessThan(5000);
     expect(r.courses).toContain("אלגוריתמים");
   });
 
-  it("child hangs without answering → served in-process after the startup timeout", async () => {
-    const r = await startWith(script("exec sleep 600"));
+  it("connector code hangs without answering → served in-process after the startup timeout", async () => {
+    const r = await startWith(script("setInterval(() => {}, 1000);"));
     expect(r.connectMs).toBeLessThan(8000);
     expect(r.tools).toContain("get_zoom_links");
     expect(r.courses).toContain("אלגוריתמים");
