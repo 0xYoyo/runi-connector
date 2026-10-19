@@ -20,7 +20,7 @@ It runs on your own computer, signs in with your Reichman account, and is **read
 
 To sign in again, change your login, or add Piazza later, ask Claude to **"connect my Reichman account"** (the `connect_account` tool reopens the sign-in page).
 
-**Updates are automatic.** You install once. The connector downloads new versions in the background (checked against npm's published checksum) and switches to them the next time Claude starts it (one restart is enough). If a new version ever fails to start, it falls back to the one that worked.
+**Updates are automatic, with no restart.** You install once. The connector checks for new versions in the background (verified against npm's published checksum) and switches to them while Claude keeps running. If a new version ever fails to start, it stays on the one that worked.
 
 ## Install — ChatGPT app (Codex)
 

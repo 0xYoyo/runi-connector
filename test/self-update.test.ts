@@ -79,19 +79,16 @@ describe("self-update", () => {
     expect(existsSync(join(data, "app", "server-9.9.9.js"))).toBe(false);
   });
 
-  it("skips a downloaded version that started but never became healthy", async () => {
-    const { downloadLatest, pickDownloadedVersion, markStarting, markHealthy } = await load();
+  it("skips a version marked bad, but not one that was merely started and closed", async () => {
+    const { downloadLatest, pickDownloadedVersion, markStarting, markBad } = await load();
     const data = mkdtempSync(join(tmpdir(), "data-"));
     latest = "9.9.8";
     await downloadLatest(data, "1.0.1");
     latest = "9.9.9";
     await downloadLatest(data, "1.0.1");
-    // 9.9.9 crashed on its first start
-    markStarting(data, "9.9.9");
-    expect(pickDownloadedVersion(data, "1.0.1")?.version).toBe("9.9.8");
-    // 9.9.8 starts fine and stays usable
-    markStarting(data, "9.9.8");
-    markHealthy(data, "9.9.8");
+    markStarting(data, "9.9.9"); // a copy started and was closed by the app: still fine
+    expect(pickDownloadedVersion(data, "1.0.1")?.version).toBe("9.9.9");
+    markBad(data, "9.9.9"); // it really failed
     expect(pickDownloadedVersion(data, "1.0.1")?.version).toBe("9.9.8");
   });
 

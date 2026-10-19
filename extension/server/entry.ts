@@ -28,7 +28,8 @@ import { testOverride } from "../../src/test-mode";
 import { clearCredentials, dataDir, loadCredentials, saveCredentials } from "./credentials";
 import { openInBrowser, openOnce, rotateSetupKey, SetupServer } from "./setup-server";
 import { runCli } from "./install";
-import { downloadLatest, markHealthy, markStarting, pickDownloadedVersion, runningVersion } from "./updates";
+import { runningVersion } from "./updates";
+import { supervise } from "./supervisor";
 
 const log = (...parts: unknown[]) => console.error("[reichman]", ...parts); // stdout is the MCP channel
 
@@ -107,24 +108,6 @@ async function withSignInLock<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-// If a newer, verified version was downloaded earlier, hand over to it (see updates.ts).
-// Returns true if it took over.
-function launchDownloadedVersion(): boolean {
-  if (!selfUpdate || process.env.RUNI_LAUNCHED) return false;
-  const pick = pickDownloadedVersion(dataDir(), runningVersion());
-  if (!pick) return false;
-  markStarting(dataDir(), pick.version);
-  process.env.RUNI_LAUNCHED = pick.version;
-  try {
-    require(pick.file);
-    return true;
-  } catch (error) {
-    log(`downloaded v${pick.version} failed to load:`, (error as Error).message);
-    delete process.env.RUNI_LAUNCHED;
-    return false;
-  }
-}
-
 // Saves a course file under the user's home folder (never anywhere else), keeping the original.
 async function saveCourseFile(folder: string | undefined, courseName: string, filename: string, bytes: ArrayBuffer): Promise<string | null> {
   const home = homedir();
@@ -182,8 +165,11 @@ async function main() {
   const REICHMAN_REJECTED =
     "Reichman stopped accepting the saved password (it was probably changed). To avoid locking the account, the connector won't retry it until the user signs in again.";
 
+  let lastProblem: { at: string; message: string } | null = null;
+
   // Turns a Reichman login failure into what the user should see; marks a wrong password.
   function reichmanFailure(error: unknown, tried: Credentials): Error {
+    lastProblem = { at: new Date().toISOString(), message: (error as Error).message };
     if (error instanceof LoginError && error.code === "bad_credentials") {
       markRejected("reichman", tried);
       return needSignIn(REICHMAN_REJECTED, 6 * 3600_000);
@@ -417,6 +403,29 @@ async function main() {
   );
 
   server.registerTool(
+    "connector_status",
+    {
+      title: "Connector status",
+      description:
+        "Shows the connector's version and whether Reichman, the Student Info Station, Panopto and Piazza are signed in, plus the last sign-in problem. For troubleshooting; doesn't open anything.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      const saved = loadCredentials();
+      const reichman = !saved.reichman ? "not connected" : saved.reichmanRejected ? "saved password rejected — needs signing in again" : "login saved";
+      const piazzaState = !saved.piazza ? "not connected" : saved.piazzaRejected ? "saved password rejected" : piazzaClient ? "signed in" : "login saved";
+      const lines = [
+        `Connector version: ${runningVersion()}`,
+        `Reichman: ${reichman}${ref.session ? `; Moodle signed in (${ref.session.props.moodleBase})` : ""}`,
+        `Piazza: ${piazzaState}`,
+        lastProblem ? `Last sign-in problem (${lastProblem.at}): ${lastProblem.message}` : "No sign-in problems since the connector started.",
+      ];
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+    },
+  );
+
+  server.registerTool(
     "forget_my_data",
     {
       title: "Delete my saved login and data",
@@ -449,28 +458,25 @@ async function main() {
   }
   // No sign-in at startup: Claude Desktop may start several copies at once, and they'd all sign
   // in together. Tools sign in on first use, one process at a time (withSignInLock).
-  if (process.env.RUNI_LAUNCHED === version) markHealthy(dataDir(), version);
-
-  // Fetch the next version in the background; it's used the next time the connector starts.
-  if (selfUpdate) {
-    const check = () =>
-      downloadLatest(dataDir(), version)
-        .then((v) => v && log(`downloaded v${v}; it will be used next time Claude starts the connector`))
-        .catch((error) => log("update download rejected:", (error as Error).message));
-    void check();
-    setInterval(check, 6 * 3600_000).unref(); // long-running sessions pick updates up too
-  }
 }
 
 // `install` / `uninstall` (one-step setup for the ChatGPT app) run and exit; otherwise serve MCP.
-// Before starting, fetch a newer version if there is one (a few seconds at most), so a single
-// restart of Claude is enough to move to it. Offline or slow: start the current one.
+// Two roles, one program:
+//  - the launcher (what Claude starts): passes messages through to a child process running the
+//    real connector, and swaps in new versions while running (supervisor.ts);
+//  - the connector itself (RUNI_CHILD=1): serves the tools.
 async function start() {
   if (runCli(process.argv, __filename)) return;
-  if (selfUpdate && !process.env.RUNI_LAUNCHED) {
-    await Promise.race([downloadLatest(dataDir(), runningVersion(), 4000).catch(() => null), new Promise((r) => setTimeout(r, 5000))]);
-  }
-  if (!launchDownloadedVersion()) await main();
+  if (process.env.RUNI_CHILD) return main();
+  const interval = Number(testOverride("RUNI_UPDATE_INTERVAL_MS")) || 30 * 60_000;
+  supervise({
+    selfPath: __filename,
+    selfVersion: runningVersion(),
+    dataDir: dataDir(),
+    log,
+    checkEveryMs: interval,
+    updates: selfUpdate,
+  });
 }
 
 start().catch((error) => {

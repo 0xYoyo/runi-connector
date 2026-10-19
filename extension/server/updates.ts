@@ -50,11 +50,9 @@ export function pickDownloadedVersion(dataDir: string, current: string): { versi
     .reverse();
   for (const v of versions) {
     if (existsSync(badMarker(dataDir, v))) continue;
-    // Started last time but never reported healthy: treat as broken.
-    if (existsSync(startedMarker(dataDir, v)) && !existsSync(okMarker(dataDir, v))) {
-      writeFileSync(badMarker(dataDir, v), "", { mode: 0o600 });
-      continue;
-    }
+    // Only an explicit failure (markBad) rules a version out. "Started but not yet healthy" isn't
+    // one: Claude Desktop starts several copies and closes the extras within a second, which
+    // used to get perfectly good versions skipped.
     return { version: v, file: serverFile(dataDir, v) };
   }
   return null;
@@ -62,6 +60,15 @@ export function pickDownloadedVersion(dataDir: string, current: string): { versi
 
 export function markStarting(dataDir: string, v: string) {
   if (!existsSync(okMarker(dataDir, v))) writeFileSync(startedMarker(dataDir, v), String(Date.now()), { mode: 0o600 });
+}
+
+/** Never use this downloaded version again (it failed to start or kept crashing). */
+export function markBad(dataDir: string, v: string) {
+  try {
+    if (existsSync(appDir(dataDir))) writeFileSync(badMarker(dataDir, v), String(Date.now()), { mode: 0o600 });
+  } catch {
+    /* best effort */
+  }
 }
 
 /** Called once a (downloaded) version is up and serving. */
