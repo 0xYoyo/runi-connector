@@ -21,9 +21,13 @@ describe("install for ChatGPT / Codex", () => {
     const codexHome = mkdtempSync(join(tmpdir(), "codex-"));
     const dataDir = mkdtempSync(join(tmpdir(), "runi-data-"));
     writeFileSync(join(codexHome, "config.toml"), `model = "gpt"\n\n[mcp_servers.other]\ncommand = "x"\n`);
-    const env = { ...process.env, CODEX_HOME: codexHome, RUNI_DATA_DIR: dataDir, RUNI_NO_SELF_UPDATE: "1" };
+    // A stand-in `claude` CLI that records how it was called.
+    const fakeClaude = join(codexHome, "fake-claude.sh");
+    writeFileSync(fakeClaude, `#!/bin/sh\necho "$@" >> "${join(codexHome, "claude-calls.txt")}"\n`, { mode: 0o755 });
+    const env = { ...process.env, CODEX_HOME: codexHome, RUNI_DATA_DIR: dataDir, RUNI_NO_SELF_UPDATE: "1", RUNI_CLAUDE_BIN: fakeClaude };
     const out = execFileSync(process.execPath, [BUNDLE, "install"], { env, encoding: "utf8" });
     expect(out).toContain("added to ChatGPT");
+    expect(out).toContain("Claude Code");
     execFileSync(process.execPath, [BUNDLE, "install"], { env, encoding: "utf8" }); // twice
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(config.match(/\[mcp_servers\.reichman\]/g)).toHaveLength(1);
@@ -32,7 +36,10 @@ describe("install for ChatGPT / Codex", () => {
     expect(config).toContain("[mcp_servers.other]");
     expect(config).toContain('model = "gpt"');
     expect(existsSync(join(dataDir, "app", "runi-connector.js"))).toBe(true);
+    const calls = readFileSync(join(codexHome, "claude-calls.txt"), "utf8");
+    expect(calls).toContain(`mcp add --transport stdio --scope user reichman -- ${process.execPath} ${join(dataDir, "app", "runi-connector.js")}`);
     execFileSync(process.execPath, [BUNDLE, "uninstall"], { env, encoding: "utf8" });
+    expect(readFileSync(join(codexHome, "claude-calls.txt"), "utf8").trim().split("\n").pop()).toBe("mcp remove reichman --scope user");
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).not.toContain("reichman");
   });
 });

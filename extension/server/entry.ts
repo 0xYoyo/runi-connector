@@ -441,7 +441,17 @@ async function main() {
 }
 
 // `install` / `uninstall` (one-step setup for the ChatGPT app) run and exit; otherwise serve MCP.
-if (!runCli(process.argv, __filename) && !launchDownloadedVersion()) main().catch((error) => {
+// Before starting, fetch a newer version if there is one (a few seconds at most), so a single
+// restart of Claude is enough to move to it. Offline or slow: start the current one.
+async function start() {
+  if (runCli(process.argv, __filename)) return;
+  if (selfUpdate && !process.env.RUNI_LAUNCHED) {
+    await Promise.race([downloadLatest(dataDir(), runningVersion(), 4000).catch(() => null), new Promise((r) => setTimeout(r, 5000))]);
+  }
+  if (!launchDownloadedVersion()) await main();
+}
+
+start().catch((error) => {
   log("fatal:", (error as Error).message);
   process.exit(1);
 });

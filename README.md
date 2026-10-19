@@ -20,7 +20,7 @@ It runs on your own computer, signs in with your Reichman account, and is **read
 
 To sign in again, change your login, or add Piazza later, ask Claude to **"connect my Reichman account"** (the `connect_account` tool reopens the sign-in page).
 
-**Updates are automatic.** You install once. The connector downloads new versions in the background (checked against npm's published checksum) and switches to them the next time Claude starts it. If a new version ever fails to start, it falls back to the one that worked.
+**Updates are automatic.** You install once. The connector downloads new versions in the background (checked against npm's published checksum) and switches to them the next time Claude starts it (one restart is enough). If a new version ever fails to start, it falls back to the one that worked.
 
 ## Install — ChatGPT app (Codex)
 
@@ -32,11 +32,15 @@ Codex runs it (approve when asked). It registers the connector with the ChatGPT 
 
 To remove it: `npx -y reichman-courses-connector uninstall`.
 
-## Install — Claude Code
+## Install — Claude Code (terminal)
+
+The same one-liner also registers it with Claude Code (all projects) if Claude Code is installed. Ask Claude Code to run it, or run it yourself:
 
 ```sh
-claude mcp add --scope user reichman -- npx -y reichman-courses-connector@latest
+npx -y reichman-courses-connector@latest install
 ```
+
+Then start a new Claude Code session (or check with `/mcp`).
 
 Both installs run the same npm package; the .mcpb is just the double-click wrapper Claude Desktop needs.
 

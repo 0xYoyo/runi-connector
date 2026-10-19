@@ -1,5 +1,5 @@
 // `npx reichman-courses-connector install` — adds the connector to the ChatGPT desktop app
-// (Codex) in one step, so a user can just paste one line into a Codex chat.
+// (Codex) and, if installed, Claude Code, in one step, so a user can paste one line into a chat.
 //
 // It copies this very program into the connector's own data folder and registers it in
 // ~/.codex/config.toml (shared by the ChatGPT desktop app, the Codex CLI and IDE extensions)
@@ -7,6 +7,7 @@
 // Dock often can't find a Node installed with nvm/Homebrew. Updates still arrive on their own
 // (updates.ts), and the saved login is the same one Claude Desktop uses.
 
+import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +31,21 @@ export function withoutOurServer(toml: string): string {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
 }
 
-export function install(selfPath: string): string {
+// Registers the connector with Claude Code (user scope = every project), if Claude Code is
+// installed. Uses its own CLI rather than editing its config file.
+function registerClaudeCode(command: string, args: string[]): boolean {
+  const claude = process.env.RUNI_CLAUDE_BIN || "claude";
+  const probe = spawnSync(claude, ["--version"], { stdio: "ignore", shell: process.platform === "win32" });
+  if (probe.status !== 0) return false;
+  spawnSync(claude, ["mcp", "remove", SERVER_NAME, "--scope", "user"], { stdio: "ignore", shell: process.platform === "win32" });
+  const added = spawnSync(claude, ["mcp", "add", "--transport", "stdio", "--scope", "user", SERVER_NAME, "--", command, ...args], {
+    stdio: "ignore",
+    shell: process.platform === "win32",
+  });
+  return added.status === 0;
+}
+
+export function install(selfPath: string): { codexConfig: string; claudeCode: boolean } {
   // 1. A stable copy of the program (npx's own copy lives in a cache that can be cleared).
   const appDir = join(dataDir(), "app");
   mkdirSync(appDir, { recursive: true, mode: 0o700 });
@@ -49,12 +64,17 @@ export function install(selfPath: string): string {
   ].join("\n");
   const base = withoutOurServer(existing);
   writeFileSync(configPath, (base ? `${base}\n\n` : "") + block + "\n");
-  return configPath;
+
+  // 3. And with Claude Code, if it's installed.
+  const claudeCode = registerClaudeCode(process.execPath, [stable]);
+  return { codexConfig: configPath, claudeCode };
 }
 
 export function uninstall(): string {
   const configPath = codexConfigPath();
   if (existsSync(configPath)) writeFileSync(configPath, withoutOurServer(readFileSync(configPath, "utf8")) + "\n");
+  const claude = process.env.RUNI_CLAUDE_BIN || "claude";
+  spawnSync(claude, ["mcp", "remove", SERVER_NAME, "--scope", "user"], { stdio: "ignore", shell: process.platform === "win32" });
   return configPath;
 }
 
@@ -62,11 +82,12 @@ export function uninstall(): string {
 export function runCli(argv: string[], selfPath: string): boolean {
   const command = argv[2];
   if (command === "install") {
-    const where = install(selfPath);
+    const { codexConfig, claudeCode } = install(selfPath);
     process.stdout.write(
-      `Reichman Courses was added to ChatGPT (Codex) in ${where}.\n` +
-        `Next: quit the ChatGPT app completely and open it again. The first time you ask about your courses, ` +
-        `a sign-in page opens in your browser (skipped if you already signed in from Claude on this computer).\n`,
+      `Reichman Courses was added to ChatGPT (Codex) in ${codexConfig}` +
+        (claudeCode ? ` and to Claude Code (all projects).\n` : `.\n`) +
+        `Next: quit and reopen the ChatGPT app${claudeCode ? ", and start a new Claude Code session" : ""}. ` +
+        `The first time you ask about your courses, a sign-in page opens in your browser (skipped if you already signed in on this computer).\n`,
     );
     return true;
   }
