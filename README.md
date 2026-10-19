@@ -42,7 +42,7 @@ Both installs run the same npm package; the .mcpb is just the double-click wrapp
 
 ## What it can do
 
-Moodle: list courses, read the syllabus (grade formula, AI policy, attendance, reading list), browse course contents, read a PDF or slide, upcoming deadlines, assignments, Moodle grades, announcements, search materials.
+Moodle: list courses, read the syllabus (grade formula, AI policy, attendance, reading list), browse course contents, read a PDF or slide, **save course files to a folder on your computer** (e.g. *"download this week's slides into Desktop/Year 2/Algorithms"*), upcoming deadlines, assignments, Moodle grades, announcements, search materials.
 Lectures: search Panopto recordings and read their transcripts (with timestamps).
 Student Info Station: official grades, exam schedule, weekly timetable.
 Piazza (optional, separate login): list classes, search, read posts.

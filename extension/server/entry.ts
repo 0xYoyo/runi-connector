@@ -11,8 +11,9 @@
  * to sign in to Reichman (or Piazza). They are never logged.
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve as resolvePath, sep } from "node:path";
+import { homedir } from "node:os";
 import { z } from "zod";
 import { Browser } from "../../src/browser";
 import { MoodleClient, type MoodleCourse } from "../../src/moodle";
@@ -121,6 +122,34 @@ function launchDownloadedVersion(): boolean {
     log(`downloaded v${pick.version} failed to load:`, (error as Error).message);
     delete process.env.RUNI_LAUNCHED;
     return false;
+  }
+}
+
+// Saves a course file under the user's home folder (never anywhere else), keeping the original.
+async function saveCourseFile(folder: string | undefined, courseName: string, filename: string, bytes: ArrayBuffer): Promise<string | null> {
+  const home = homedir();
+  const clean = (part: string) => part.replace(/[\/\\:*?"<>|\x00-\x1f]/g, "-").replace(/^\.+/, "").trim().slice(0, 150) || "file";
+  const asked = folder?.trim().replace(/^~(?=$|[\/\\])/, home);
+  // "Desktop/Year 2/…" means inside the home folder, not wherever the connector happens to run.
+  const target = asked ? (isAbsolute(asked) ? resolvePath(asked) : resolvePath(home, asked)) : join(home, "Downloads", "Reichman", clean(courseName));
+  const inside = (p: string, root: string) => p === root || p.startsWith(root + sep);
+  if (!inside(target, home)) throw new Error(`can only save inside your home folder (${home}), not ${target}`);
+  try {
+    mkdirSync(target, { recursive: true });
+    // A shortcut (symlink) inside the home folder mustn't lead outside it.
+    if (!inside(realpathSync(target), realpathSync(home))) throw new Error(`can only save inside your home folder (${home})`);
+    const path = join(target, clean(filename));
+    if (existsSync(path) && statSync(path).size === bytes.byteLength) return null;
+    writeFileSync(path, Buffer.from(bytes));
+    return path;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      throw new Error(
+        `not allowed to write to ${target}. On a Mac, allow Claude in System Settings → Privacy & Security → Files and Folders, or pick another folder (e.g. ~/Documents/Reichman).`,
+      );
+    }
+    throw error;
   }
 }
 
@@ -337,6 +366,7 @@ async function main() {
     michlol,
     piazza,
     srtToText,
+    saveFile: saveCourseFile,
   });
 
   server.registerTool(

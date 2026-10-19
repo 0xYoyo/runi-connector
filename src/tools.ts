@@ -35,6 +35,8 @@ interface CourseSection {
 }
 
 const INSTRUCTIONS = `Tools for a Reichman University student's own data: Moodle (courses, files, deadlines, assignments, announcements, Moodle grades), syllabi, the Student Info Station (official grades, weekly class timetable / מערכת שעות, exam schedule), Panopto lecture recordings and transcripts, and Piazza.
+- These tools sign in to Reichman by themselves with the student's saved login. Use them instead of opening Moodle, My RUNI or Panopto in a browser, and never ask the student to log in to those sites.
+- To save course files (slides, PDFs) onto the computer, use download_course_files.
 - If a tool fails with a sign-in or connection error, say so and suggest trying again; don't tell the user the data isn't available.
 - Course arguments accept a course name (Hebrew or English), a course number like "77", or a Moodle id.
 - Syllabi include grading formulas, AI policies, attendance rules and reading lists.
@@ -117,6 +119,12 @@ export interface BuildOptions {
   michlol?: MichlolLike;
   /** Piazza Q&A (local versions only; `configured` is false until the user adds Piazza login). */
   piazza?: PiazzaLike;
+  /**
+   * Saves a downloaded course file on the user's computer (local versions only). `folder` is what
+   * the user asked for (may be empty → a default per course); returns the saved path, or null if an
+   * identical file was already there.
+   */
+  saveFile?: (folder: string | undefined, courseName: string, filename: string, bytes: ArrayBuffer) => Promise<string | null>;
   /** Caption text compactor, injected so tools.ts stays free of the panopto module. */
   srtToText?: (srt: string) => string;
   /** If a newer version is available, a one-line notice appended to the server instructions. */
@@ -342,6 +350,61 @@ export function buildServer(
       );
     }),
   );
+
+  if (options.saveFile) {
+    const saveFile = options.saveFile;
+    server.registerTool(
+      "download_course_files",
+      {
+        title: "Save course files to the computer",
+        description:
+          "Downloads a course's files from Moodle (lecture slides, recitations, PDFs, Word/PowerPoint files) and saves the originals into a folder on the student's computer. Give the course, and optionally which files (parts of their names, or URLs from get_course_contents) and the folder. Without `files`, saves every file in the course (or in the matching section). Files already saved are skipped.",
+        inputSchema: {
+          course: z.string().describe("Course name, number or Moodle id"),
+          files: z.array(z.string()).optional().describe("Parts of file names, or file URLs; omit for all files"),
+          section: z.string().optional().describe("Only files in sections whose name contains this, e.g. 'Lecture 3' or 'שבוע 2'"),
+          folder: z
+            .string()
+            .optional()
+            .describe("Where to save, inside the student's home folder, e.g. '~/Desktop/Year 2/Semester A/Algorithms'. Default: ~/Downloads/Reichman/<course>"),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      },
+      safe(async ({ course, files, section, folder }: { course: string; files?: string[]; section?: string; folder?: string }) => {
+        const found = await resolveCourse(course);
+        const sections = await contents(found.id);
+        const pool = sections
+          .filter((s) => !section || (s.name ?? "").toLowerCase().includes(section.toLowerCase()))
+          .flatMap((s) => s.modules.flatMap((m) => (m.contents ?? []).filter((c) => c.type === "file")));
+        const wanted = files?.length
+          ? pool.filter((c) => files.some((f) => c.fileurl === f || c.filename.toLowerCase().includes(f.toLowerCase())))
+          : pool;
+        const unique = [...new Map(wanted.map((c) => [c.fileurl, c])).values()];
+        if (unique.length === 0) return failure(`No matching files in ${found.fullname}. Use get_course_contents to see what's there.`);
+        if (unique.length > 80) return failure(`That's ${unique.length} files. Narrow it down with \`files\` or \`section\` (max 80 at a time).`);
+        const saved: string[] = [];
+        const skipped: string[] = [];
+        const failed: string[] = [];
+        for (const file of unique) {
+          try {
+            const { bytes } = await requireMoodle().downloadFile(file.fileurl);
+            const path = await saveFile(folder, found.fullname, file.filename, bytes);
+            if (path) saved.push(path);
+            else skipped.push(file.filename);
+          } catch (error) {
+            failed.push(`${file.filename}: ${(error as Error).message}`);
+            if (/not allowed|permission|EPERM|EACCES/i.test((error as Error).message)) break; // same for the rest
+          }
+        }
+        const lines = [
+          saved.length ? `Saved ${saved.length} file(s):\n${saved.map((p) => `- ${p}`).join("\n")}` : "",
+          skipped.length ? `Already there (skipped): ${skipped.join(", ")}` : "",
+          failed.length ? `Couldn't save:\n${failed.map((f) => `- ${f}`).join("\n")}` : "",
+        ].filter(Boolean);
+        return text(lines.join("\n\n"));
+      }),
+    );
+  }
 
   server.registerTool(
     "get_upcoming_deadlines",

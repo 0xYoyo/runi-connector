@@ -16,6 +16,7 @@ const run = existsSync(BUNDLE) ? describe : describe.skip;
 let mock: { server: Server; base: string };
 let client: Client;
 let dataDir: string;
+let home: string;
 const OLD_PASSWORD = "old-password-" + Math.random();
 const text = (r: any) => r.content.map((c: any) => c.text).join("\n");
 
@@ -28,6 +29,7 @@ beforeAll(async () => {
   if (!existsSync(BUNDLE)) return;
   mock = await startMockReichman();
   dataDir = mkdtempSync(join(tmpdir(), "runi-life-"));
+  home = mkdtempSync(join(tmpdir(), "runi-home-"));
   // A saved login whose password has since been changed at Reichman.
   const creds = { reichman: { username: VALID_USER.username, password: OLD_PASSWORD } };
   writeFileSync(join(dataDir, "credentials.hex"), Buffer.from(JSON.stringify(creds)).toString("hex"), { mode: 0o600 });
@@ -39,6 +41,7 @@ beforeAll(async () => {
       env: {
         ...process.env,
         RUNI_DATA_DIR: dataDir,
+        HOME: home,
         RUNI_SETUP_PORT: "0",
         RUNI_NO_SELF_UPDATE: "1",
         RUNI_TEST_MODE: "1",
@@ -114,5 +117,19 @@ run("account lifecycle", () => {
     expect(week).not.toContain("123456789");
     const exams = text(await client.callTool({ name: "get_exam_schedule", arguments: {} }));
     expect(exams).toContain("תאריך: 25/01/2027");
+  });
+
+  it("saves course files into a folder in the home folder, skips repeats, refuses outside it", async () => {
+    const first = text(await client.callTool({ name: "download_course_files", arguments: { course: "77", folder: "Desktop/Year 2/Semester A/Algorithms" } }));
+    const saved = join(home, "Desktop", "Year 2", "Semester A", "Algorithms", "week1-graphs.pdf");
+    expect(first).toContain(saved);
+    const { readFileSync } = await import("node:fs");
+    expect(readFileSync(saved).subarray(0, 5).toString()).toBe("%PDF-");
+    const again = text(await client.callTool({ name: "download_course_files", arguments: { course: "77", folder: "~/Desktop/Year 2/Semester A/Algorithms" } }));
+    expect(again).toContain("Already there");
+    const outside = text(await client.callTool({ name: "download_course_files", arguments: { course: "77", folder: "/etc/x" } }));
+    expect(outside).toMatch(/only save inside your home folder/);
+    const byDefault = text(await client.callTool({ name: "download_course_files", arguments: { course: "77", files: ["week1"] } }));
+    expect(byDefault).toContain(join(home, "Downloads", "Reichman"));
   });
 });
