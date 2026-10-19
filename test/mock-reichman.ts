@@ -214,7 +214,7 @@ export function startMockReichman(
     // session the gateway shows a dead-end "access not found" page (seen live).
     if (url.pathname === "/Panopto/Pages/Auth/Login.aspx" && req.method === "GET") {
       // Moodle provider: Panopto asks Moodle (block_panopto SSO), which answers for its logged-in user.
-      if (url.searchParams.get("instance") === "MoodleProd2027") {
+      if (/^MoodleProd\d{4}$/.test(url.searchParams.get("instance") ?? "")) {
         if (url.searchParams.get("authCode") === "moodle-ok") {
           const sid = crypto.randomUUID();
           panoptoSessions.add(sid);

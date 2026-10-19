@@ -217,7 +217,9 @@ async function main() {
   const ensureReichman = (): Promise<UserProps> => (ref.session ? Promise.resolve(ref.session.props) : connectReichman());
 
   const piazzaHost = testOverride("PIAZZA_HOST");
-  const moodleYear = () => Number(ref.session?.props.moodleBase.match(/\/(\d{4})$/)?.[1] ?? new Date().getFullYear());
+  // The academic year (Moodle's base URL ends with it); falls back to the current academic year.
+  const moodleYear = () =>
+    Number(ref.session?.props.moodleBase.match(/\/(\d{4})$/)?.[1] ?? moodleBaseCandidates()[0].match(/\/(\d{4})$/)?.[1] ?? new Date().getFullYear());
   const panoptoHost = testOverride("PANOPTO_HOST");
   const michlolHost = testOverride("MICHLOL_HOST");
   const needBrowser = (): Browser => {
