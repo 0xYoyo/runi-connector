@@ -97,6 +97,27 @@ export class MoodleClient {
     }));
   }
 
+  // Uploads a file to the user's Moodle draft area (for submissions). Returns the draft item id;
+  // pass the same id again to add more files to that draft.
+  async uploadDraftFile(filename: string, bytes: Uint8Array, itemid = 0): Promise<number> {
+    const form = new FormData();
+    form.set("token", this.token);
+    form.set("filearea", "draft");
+    form.set("itemid", String(itemid));
+    form.set("file_1", new Blob([new Uint8Array(bytes)]), filename);
+    const response = await this.fetchFn(`${this.baseUrl}/webservice/upload.php`, { method: "POST", body: form });
+    const data = (await response.json().catch(() => null)) as
+      | Array<{ itemid: number; filename: string }>
+      | { error?: string; errorcode?: string }
+      | null;
+    if (!Array.isArray(data) || !data[0]) {
+      const err = data && !Array.isArray(data) ? data : {};
+      if (err.errorcode === "invalidtoken") throw new MoodleSessionExpired();
+      throw new MoodleError(`Upload of ${filename} failed: ${err.error ?? `HTTP ${response.status}`}`);
+    }
+    return data[0].itemid;
+  }
+
   // Downloads a file from a Moodle file URL (pluginfile), authenticating with the token.
   async downloadFile(fileUrl: string): Promise<{ bytes: ArrayBuffer; contentType: string }> {
     const url = new URL(fileUrl);

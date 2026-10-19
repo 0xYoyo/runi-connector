@@ -12,7 +12,7 @@
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, resolve as resolvePath, sep } from "node:path";
+import { basename, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
 import { Browser } from "../../src/browser";
@@ -20,7 +20,9 @@ import { MoodleClient, type MoodleCourse } from "../../src/moodle";
 import { MichlolClient } from "../../src/michlol";
 import { PanoptoClient, srtToText } from "../../src/panopto";
 import { PiazzaAuthError, PiazzaClient } from "../../src/piazza";
-import { LoginError, signInToMoodle, type Credentials } from "../../src/reichman-login";
+import { isHandOffPage, LoginError, navigateThroughLogin, signInToMoodle, type Credentials } from "../../src/reichman-login";
+import { PendingActions } from "../../src/actions";
+import { moodlePageText } from "../../src/moodle-extras";
 import { DEFAULT_SYLLABUS_URL, harvestSyllabi } from "../../src/syllabi";
 import { buildServer, NotConnectedError, type MichlolLike, type PanoptoLike, type PiazzaLike, type UserProps } from "../../src/tools";
 import { moodleBaseCandidates } from "./entry-year";
@@ -136,6 +138,25 @@ async function saveCourseFile(folder: string | undefined, courseName: string, fi
   }
 }
 
+// Reads a file the student wants to submit. Only files inside the home folder, up to 100 MB.
+async function readLocalFile(path: string): Promise<{ name: string; bytes: Uint8Array }> {
+  const home = homedir();
+  const asked = path.trim().replace(/^~(?=$|[\/\\])/, home);
+  const full = isAbsolute(asked) ? resolvePath(asked) : resolvePath(home, asked);
+  let real: string;
+  try {
+    real = realpathSync(full);
+  } catch {
+    throw new Error(`File not found: ${full}`);
+  }
+  const homeReal = realpathSync(home);
+  if (!real.startsWith(homeReal + sep)) throw new Error(`Only files inside your home folder (${home}) can be submitted.`);
+  const info = statSync(real);
+  if (!info.isFile()) throw new Error(`${full} is not a file.`);
+  if (info.size > 100 * 1024 * 1024) throw new Error(`${full} is larger than 100 MB.`);
+  return { name: basename(real), bytes: new Uint8Array(readFileSync(real)) };
+}
+
 async function main() {
   const cache = fileCache();
   const ref: { session: Session | null } = { session: null };
@@ -213,6 +234,47 @@ async function main() {
     return ref.session.browser;
   };
 
+  // Moodle "external tool" activities (Panopto, Zoom…) in the student's courses, as launch links.
+  async function ltiActivities(name: RegExp): Promise<Array<{ course: MoodleCourse; cmid: number; name: string; launchUrl: string }>> {
+    const props = await ensureReichman();
+    const moodle = new MoodleClient(props.moodleBase, props.moodleToken);
+    const found = [];
+    for (const course of await moodle.courses(props.userId)) {
+      const sections = await moodle.call<Array<{ modules: Array<{ id: number; name: string; modname: string }> }>>("core_course_get_contents", { courseid: course.id });
+      for (const m of sections.flatMap((s) => s.modules)) {
+        if (m.modname === "lti" && name.test(m.name)) found.push({ course, cmid: m.id, name: m.name, launchUrl: `${props.moodleBase}/mod/lti/launch.php?id=${m.id}` });
+      }
+    }
+    return found;
+  }
+  const ltiLaunchUrls = async (name: RegExp) => (await ltiActivities(name)).map((a) => a.launchUrl);
+
+  // Opens a Moodle page with the signed-in web session (signing in again if Moodle forgot it).
+  async function openMoodlePage(url: string) {
+    const props = await ensureReichman();
+    const moodleOrigin = new URL(props.moodleBase).origin;
+    if (new URL(url).origin !== moodleOrigin) throw new Error("Only Reichman Moodle pages can be opened.");
+    return withSignInLock(() =>
+      navigateThroughLogin(needBrowser(), url, reichmanCreds() ?? { username: "", password: "" }, (page) => {
+        const here = new URL(page.url);
+        return here.origin === moodleOrigin && !/\/login\/index\.php|\/auth\/saml2\//.test(here.pathname);
+      }),
+    );
+  }
+  // Opens an external-tool activity (Zoom, Panopto…) the way clicking it in Moodle does: Moodle
+  // posts a signed hand-off form to the tool, which may answer with more hand-off forms.
+  async function launchLti(cmid: number) {
+    const props = await ensureReichman();
+    const page = await withSignInLock(() =>
+      navigateThroughLogin(needBrowser(), `${props.moodleBase}/mod/lti/launch.php?id=${cmid}`, reichmanCreds() ?? { username: "", password: "" },
+        // Done once we've left Moodle and the tool shows a page that isn't another hand-off.
+        (p) => !p.url.startsWith(props.moodleBase + "/") && !isHandOffPage(p.text()),
+      ),
+    );
+    return { url: page.url, html: page.text() };
+  }
+  const readMoodlePage = async (url: string) => moodlePageText((await openMoodlePage(url)).text());
+
   const reichmanCreds = () => {
     const creds = loadCredentials();
     return creds.reichmanRejected ? undefined : creds.reichman;
@@ -231,6 +293,13 @@ async function main() {
         michlol: michlolClient,
         panopto: new PanoptoClient(
           [
+            {
+              // Same as clicking a course's "Panopto" activity in Moodle.
+              instance: "Moodle Panopto activity",
+              browser: needBrowser,
+              before: async () => void (await ensureReichman()),
+              launchUrls: () => ltiLaunchUrls(/panopto/i),
+            },
             {
               get instance() {
                 return `MoodleProd${moodleYear()}`; // known once Moodle has signed in (before runs first)
@@ -374,6 +443,10 @@ async function main() {
     piazza,
     srtToText,
     saveFile: saveCourseFile,
+    readMoodlePage,
+    readLocalFile,
+    launchLti,
+    actions: new PendingActions(),
   });
 
   server.registerTool(

@@ -70,6 +70,10 @@ const LOGGED_OUT_PAGE = `<!doctype html><html><head><title>Reichman University</
 <p>בוצעה התנתקות</p><a href="/">לחץ כאן להמשך</a></body></html>`;
 
 const passwordAttempts: string[] = []; // every password the fake login server received
+// Calls that changed something in the fake Moodle (uploads, submissions, posts).
+export const ltiLaunches: string[] = [];
+export const writes: Array<{ fn: string; params: Record<string, string> }> = [];
+
 export function receivedPasswords() {
   return passwordAttempts;
 }
@@ -164,12 +168,108 @@ export function startMockReichman(
               },
             ],
           },
+          {
+            id: 2,
+            name: "Zoom",
+            summary: `<p>Lecture room: <a href="https://runi.zoom.us/j/111222333?pwd=abc&amp;x=1">Zoom</a></p>`,
+            modules: [
+              { id: 21, name: "Panopto 2027", modname: "lti", url: `${base}/moodle/mod/lti/view.php?id=21` },
+              { id: 22, name: "Zoom 2027", modname: "lti", url: `${base}/moodle/mod/lti/view.php?id=22` },
+              { id: 24, name: "Recitation Zoom", modname: "url", url: `${base}/moodle/mod/url/view.php?id=24`, contents: [{ type: "url", filename: "x", filesize: 0, fileurl: "https://runi.zoom.us/j/444555666" }] },
+              { id: 23, name: "Attendance", modname: "attendance", url: `${base}/moodle/mod/attendance/view.php?id=23` },
+            ],
+          },
         ]);
+      if (fn === "mod_forum_get_forums_by_courses")
+        return json([
+          { id: 501, name: "Announcements", type: "news" },
+          { id: 502, name: "Q&A Forum", type: "general" },
+        ]);
+      if (fn === "mod_forum_get_forum_discussions")
+        return json({ discussions: [{ discussion: 9001, subject: `HW1 question (forum ${body.get("forumid")})`, created: 1760000000, userfullname: "Dana", numreplies: 1 }] });
+      if (fn === "mod_forum_get_discussion_posts")
+        return json({
+          posts: [
+            { id: 7001, subject: "HW1 question", message: "<p>Is Q2 graded?</p>", timecreated: 1760000000, author: { fullname: "Dana" }, parentid: null },
+            { id: 7002, subject: "Re: HW1 question", message: "<p>Yes, 20 points.</p>", timecreated: 1760003600, author: { fullname: "TA" }, parentid: 7001 },
+          ],
+        });
+      if (fn === "mod_forum_add_discussion" || fn === "mod_forum_add_discussion_post") {
+        writes.push({ fn, params: Object.fromEntries(body) });
+        return json(fn === "mod_forum_add_discussion" ? { discussionid: 9002, warnings: [] } : { postid: 7003, warnings: [] });
+      }
+      if (fn === "mod_assign_get_assignments")
+        return json({ courses: [{ id: 2701328, assignments: [{ id: 301, name: "HW1 - Graphs", duedate: 1760500000 }, { id: 302, name: "HW2 - Trees", duedate: 1761500000 }] }] });
+      if (fn === "mod_assign_get_submission_status")
+        return json(
+          body.get("assignid") === "301"
+            ? {
+                lastattempt: { submission: { status: "submitted", timemodified: 1760400000 }, gradingstatus: "graded" },
+                feedback: { gradefordisplay: "92.00 / 100.00", plugins: [{ type: "comments", editorfields: [{ text: "<p>Nice proof in Q2</p>" }] }] },
+              }
+            : { lastattempt: { submission: { status: "new", timemodified: 0 }, gradingstatus: "notgraded" } },
+        );
+      if (fn === "mod_assign_save_submission" || fn === "mod_assign_submit_for_grading") {
+        writes.push({ fn, params: Object.fromEntries(body) });
+        return json([]);
+      }
+      if (fn === "mod_quiz_get_quizzes_by_courses") return json({ quizzes: [{ id: 401, name: "Quiz 1", grade: 10, sumgrades: 5, timeclose: 0 }] });
+      if (fn === "mod_quiz_get_user_attempts") return json({ attempts: [{ attempt: 1, state: "finished", sumgrades: 4, timefinish: 1760100000 }] });
+      if (fn === "mod_quiz_get_user_best_grade") return json({ hasgrade: true, grade: 8 });
+      if (fn === "mod_quiz_get_quiz_feedback_for_grade") return json({ feedbacktext: "<p>Good job</p>" });
+      if (fn === "core_course_get_updates_since")
+        return json({ instances: [{ contextlevel: "module", id: 11, updates: [{ name: "configuration" }, { name: "fileareas" }] }], warnings: [] });
       if (fn === "core_calendar_get_action_events_by_timesort")
         return json({ events: [{ name: "HW1 is due", timesort: Math.floor(Date.now() / 1000) + 86400, course: { fullname: "אלגוריתמים" } }] });
       if (fn === "gradereport_user_get_grade_items")
         return json({ usergrades: [{ gradeitems: [{ itemname: "HW1", itemtype: "mod", gradeformatted: "95.00", rangeformatted: "0–100", percentageformatted: "95.00 %", feedback: "" }] }] });
       return json({ exception: "x", errorcode: "unknownfunction", message: `mock has no ${fn}` });
+    }
+    if (url.pathname === "/moodle/webservice/upload.php" && req.method === "POST") {
+      const raw = await readRaw(req);
+      if (!raw.includes(MOODLE_TOKEN)) return send(200, JSON.stringify({ error: "Invalid token", errorcode: "invalidtoken" }), { "Content-Type": "application/json" });
+      const filename = raw.match(/filename="([^"]+)"/)?.[1] ?? "file";
+      writes.push({ fn: "upload", params: { filename, size: String(raw.length) } });
+      return send(200, JSON.stringify([{ itemid: 777, filename }]), { "Content-Type": "application/json" });
+    }
+    // An LTI 1.3 launch: Moodle posts a login-initiation form to the tool; the tool asks Moodle
+    // for an id_token (auth.php), which comes back as another auto-posting form.
+    if (url.pathname === "/moodle/mod/lti/launch.php") {
+      if (!moodleLoggedIn) return redirect("/moodle/login/index.php");
+      const id = url.searchParams.get("id");
+      ltiLaunches.push(id ?? "");
+      const tool = id === "21" ? `${base}/Panopto/LTI/oidc` : id === "22" ? `${base}/zoomlti/lti/oidc` : null;
+      if (!tool) return send(404, "no such activity");
+      return send(200, `<html><body onload="document.ltiInitiateLoginForm.submit()"><form action="${tool}" name="ltiInitiateLoginForm" method="post">
+        <input type="hidden" name="iss" value="${base}/moodle"><input type="hidden" name="target_link_uri" value="${tool}">
+        <input type="hidden" name="login_hint" value="42"><input type="hidden" name="lti_message_hint" value="${id}"></form></body></html>`);
+    }
+    if ((url.pathname === "/Panopto/LTI/oidc" || url.pathname === "/zoomlti/lti/oidc") && req.method === "POST") {
+      const body = await readBody(req);
+      const back = url.pathname.startsWith("/Panopto") ? "/Panopto/LTI/launch" : "/zoomlti/lti/launch";
+      return redirect(`/moodle/mod/lti/auth.php?redirect_uri=${encodeURIComponent(base + back)}&state=st&lti_message_hint=${body.get("lti_message_hint")}`);
+    }
+    if (url.pathname === "/moodle/mod/lti/auth.php") {
+      if (!moodleLoggedIn) return send(200, "<html><body>Not logged in</body></html>");
+      return send(200, `<html><body onload="document.forms[0].submit()"><form action="${url.searchParams.get("redirect_uri")}" method="post">
+        <input type="hidden" name="id_token" value="jwt-${url.searchParams.get("lti_message_hint")}"><input type="hidden" name="state" value="st"></form></body></html>`);
+    }
+    if (url.pathname === "/Panopto/LTI/launch" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.get("id_token") !== "jwt-21") return send(400, "bad token");
+      const sid = crypto.randomUUID();
+      panoptoSessions.add(sid);
+      return send(200, `<html><body><h1>Algorithms recordings</h1></body></html>`, { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/Panopto` });
+    }
+    if (url.pathname === "/zoomlti/lti/launch" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.get("id_token") !== "jwt-22") return send(400, "bad token");
+      return send(200, `<html><body><div role="main"><table><tr><td>Algorithms lecture</td><td>Sun 10:00</td><td><a href="https://runi.zoom.us/j/999888777?pwd=zz">Join</a></td></tr></table></div></body></html>`);
+    }
+    if (url.pathname === "/moodle/mod/attendance/view.php") {
+      if (!moodleLoggedIn) return redirect("/moodle/login/index.php");
+      return send(200, `<html><body><header>menu</header><div role="main"><h2>Attendance</h2><table>
+        <tr><th>Date</th><th>Status</th></tr><tr><td>Sun 12 Oct</td><td>Present</td></tr><tr><td>Sun 19 Oct</td><td>Absent</td></tr></table></div><footer>f</footer></body></html>`);
     }
     if (url.pathname.startsWith("/moodle/webservice/pluginfile.php/")) {
       if (url.searchParams.get("token") !== MOODLE_TOKEN) return send(403, "nope");

@@ -2,7 +2,7 @@
 // same Browser that signed in to Moodle. Read-only: list/search recordings and read captions.
 
 import type { Browser } from "./browser";
-import { LoginError, navigateThroughLogin, type Credentials } from "./reichman-login";
+import { isHandOffPage, LoginError, navigateThroughLogin, type Credentials } from "./reichman-login";
 
 export const PANOPTO_HOST = "https://runi.cloud.panopto.eu";
 
@@ -35,7 +35,13 @@ function parseMsDate(value: string | null): string | null {
 
 /** One way to sign in to Panopto: a Panopto login provider and the browser session to use. */
 export interface PanoptoRoute {
-  instance: string; // Panopto login provider, e.g. "MoodleProd2027" or "IDCPROD"
+  instance: string; // Panopto login provider, e.g. "MoodleProd2027" or "IDCPROD"; a label for LTI routes
+  /**
+   * Instead of Panopto's login page, open these pages (Moodle's launch links of each course's
+   * "Panopto" activity). Each one hands the student to Panopto already signed in, with access to
+   * that course's recordings, the same way clicking it in Moodle does.
+   */
+  launchUrls?: () => Promise<string[]>;
   browser: () => Browser; // the session to sign in with (cookies must already be signed in, or creds work)
   before?: (fresh: boolean) => Promise<void>; // e.g. make sure Moodle is signed in first
 }
@@ -75,7 +81,8 @@ export class PanoptoClient {
       try {
         await route.before?.(false);
         const browser = route.browser();
-        await this.walkLogin(browser, route.instance);
+        if (route.launchUrls) await this.launchAll(browser, await route.launchUrls());
+        else await this.walkLogin(browser, route.instance);
         this.active = browser;
         this.authed = true;
         return;
@@ -110,6 +117,26 @@ export class PanoptoClient {
         return !/\/Auth\/Login\.aspx$/i.test(url.pathname) || /loginControl\$Logout|Sign out|התנתק/i.test(html);
       },
     );
+  }
+
+  // Opens each course's Panopto activity in Moodle (an LTI launch: Moodle posts a signed form to
+  // Panopto, which signs the student in and grants that course's folder). One success is enough.
+  private async launchAll(browser: Browser, urls: string[]) {
+    if (urls.length === 0) throw new LoginError("unexpected_page", "No course has a Panopto activity in Moodle.");
+    const creds = this.credentials?.() ?? { username: "", password: "" };
+    const problems: string[] = [];
+    let ok = 0;
+    for (const url of urls) {
+      try {
+        // Done once Panopto shows a page that isn't another hand-off form.
+        await navigateThroughLogin(browser, url, creds, (page) => page.url.startsWith(`${this.host}/Panopto/`) && !isHandOffPage(page.text()));
+        ok++;
+      } catch (error) {
+        if (!(error instanceof LoginError) || error.code !== "unexpected_page") throw error;
+        problems.push(error.message);
+      }
+    }
+    if (ok === 0) throw new LoginError("unexpected_page", `Panopto launch from Moodle failed: ${problems.slice(0, 2).join(" | ")}`);
   }
 
   // Signs in again on the next call (after the Moodle session was renewed).

@@ -1,6 +1,6 @@
 {
   "name": "reichman-courses-connector",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Unofficial MCP connector that lets Reichman University students ask Claude, ChatGPT, Codex or Gemini about their own Moodle courses and syllabi.",
   "scripts": {
     "dev": "wrangler dev",

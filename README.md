@@ -7,7 +7,9 @@ Ask Claude about your own Reichman University courses, in plain language:
 > "Find Max's recitation 5 in probability and tell me if he covers the bell curve."
 > "What did I get in Digital Systems?"
 
-It runs on your own computer, signs in with your Reichman account, and is **read-only**.
+It runs on your own computer and signs in with your Reichman account. It reads Moodle (files, deadlines, forums, assignment feedback, quiz results, attendance, Zoom links), syllabi, the Student Info Station (grades, timetable, exams), Panopto recordings and Piazza.
+
+It can also **submit an assignment or post in a course forum**, but never on its own: it first shows you exactly what it will send, and only does it after you say yes.
 
 **Unofficial student project. Not affiliated with or endorsed by Reichman University.**
 
@@ -61,7 +63,7 @@ Courses can be named in Hebrew or English, by course number (`77`), or by Moodle
 - **The Moodle session or token expires:** it signs in again by itself with your saved login. You don't notice.
 - **You change your Reichman (or Piazza) password:** the next request fails once. The connector marks the saved password as outdated and **never tries it again** (repeated wrong attempts can lock your account). Then the sign-in page opens, and Claude shows you the link. Enter the new password; everything works again without a restart.
 - **You want to add Piazza later, or switch accounts:** ask Claude to *"connect my Reichman account"*. It opens the page and shows the link.
-- **A new version comes out:** it downloads in the background and is used the next time Claude starts the connector. No re-download, no clicks.
+- **A new version comes out:** it downloads in the background and switches over while Claude keeps running. No re-download, no clicks, no restart.
 - **You want everything gone:** ask Claude to *"forget my Reichman data"* (deletes the saved logins and cached course data), then remove the extension. Removing the extension alone doesn't delete the saved login.
 
 ## How sign-in works, and what happens to your password
@@ -73,7 +75,7 @@ Reichman doesn't offer outside apps a "Sign in with Reichman" button, and studen
 - It is used only to sign in to Reichman (and Piazza, if you add it). It is never logged, never sent anywhere else, and a test asserts it never appears in any error or trace.
 - The sign-in page runs locally (127.0.0.1), loads nothing external, and only works with a private key stored in your user folder, so websites, other programs and other users on the computer can't drive it or impersonate it.
 - Updates come only from the npm package, checked against the registry's published checksum. Publishing requires the maintainer's two-factor sign-in or this repository's release workflow.
-- Everything is read-only. `forget_my_data` erases it all.
+- Reading is the default. The only things that change anything (submitting an assignment, posting in a forum) need your explicit OK on an exact preview; each confirmation code works once and expires in 15 minutes. Files can only be submitted from inside your home folder. `forget_my_data` erases everything saved.
 
 > Your Reichman password also opens email and other university systems. This tool never keeps it anywhere but your own machine, but it is unofficial — use it on your own account only, if you're comfortable with that.
 

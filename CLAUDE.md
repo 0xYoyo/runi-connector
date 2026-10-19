@@ -25,7 +25,7 @@ Unofficial remote MCP server (Cloudflare Worker) that lets Reichman University s
 - The user's password must only ever exist in memory during the sign-in request. Never log it, store it in KV, put it in props/metadata, error messages, traces, analytics, or URLs. `test/flow.test.ts` asserts this; keep that test passing and extend it if you touch the login path.
 - Only the Moodle token is persisted, inside OAuth `props` (encrypted by the provider). Grant `metadata` is unencrypted: keep it empty.
 - The sign-in page must stay script-free and load no external resources (see `SIGN_IN_PAGE_HEADERS` in src/index.ts).
-- Tools are read-only. Don't add tools that submit, post, or change anything in Moodle without Yoyo explicitly asking.
+- Tools read by default. Yoyo asked (2026-10-19) for everything reachable, including submitting. Anything that changes something goes through `src/actions.ts` PendingActions: the tool returns an exact preview + a single-use 15-min code, and only `confirm_action` runs it (local versions only; the hosted Worker gets no `actions`). Never add a write path that bypasses it.
 - The product is unofficial: never use Reichman logos/branding or imply affiliation.
 
 ## Local version (the one that works today)
@@ -65,6 +65,13 @@ Unofficial remote MCP server (Cloudflare Worker) that lets Reichman University s
 - Anthropic's directory won't take this: policy 3.F requires owning/controlling every endpoint the software connects to (Reichman's sites). Self-update via npm is the update path.
 - `download_course_files` (local only, `BuildOptions.saveFile` → entry.ts `saveCourseFile`): saves original Moodle files under the user's home folder only (relative paths are relative to home; `~` expanded; realpath checked so symlinks can't escape); default `~/Downloads/Reichman/<course>`; same-size files skipped; max 80 per call. Writes to the user's disk, never to Moodle. Server instructions tell the model to use the connector instead of browsing Reichman sites.
 - Michlol: grades/weeklySchedule/examSchedule via `runQuery` (see live facts above). contactAdminForm exists but NO send tool yet — a real write to student admin needs careful live verification before enabling; gate it behind confirm-before-send when added.
+
+## More Moodle (v1.6, src/moodle-extras.ts, tests in test/features.test.ts)
+
+- Read: get_forum_discussions, read_forum_discussion, get_assignment_feedback (mod_assign_get_submission_status), get_quiz_results, whats_new (core_course_get_updates_since), get_zoom_links. Local only: get_attendance + read_moodle_page (Moodle web session via `navigateThroughLogin`, Moodle origin only, `moodlePageText`).
+- Write (preview → confirm_action): submit_assignment (webservice/upload.php draft → mod_assign_save_submission → mod_assign_submit_for_grading; files only from inside home, ≤100 MB), post_to_forum (mod_forum_add_discussion / add_discussion_post; not into news forums).
+- LTI: Panopto and Zoom are Moodle "external tool" activities ("Panopto 2027", "Zoom 2027"). entry.ts `launchLti(cmid)` opens `mod/lti/launch.php?id=` with the Moodle web session and follows the LTI 1.3 hand-off forms (`isHandOffPage`). Panopto's first route launches every course's Panopto activity (`PanoptoRoute.launchUrls`); MoodleProd/IDCPROD are fallbacks. NOT yet verified live (the user's Chrome session had expired when checked 2026-10-19): verify Panopto search + what the Zoom LTI page returns (it may be a JS app; then find its JSON API).
+- Not done yet: .ics export, more Student Info Station pages (finances 11, documents 7, messages 18, inquiry tracking 48; PRGNAMEs need live discovery), message to student admin.
 
 ## Notes
 

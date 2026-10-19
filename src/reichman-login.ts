@@ -86,6 +86,11 @@ function fillLoginForm(form: HtmlForm, credentials: Credentials): Record<string,
   return { [username.name]: credentials.username, [password.name]: credentials.password };
 }
 
+/** True if the page is an LTI/SAML hand-off: a form that only passes a signed message on. */
+export function isHandOffPage(html: string): boolean {
+  return /<form[^>]*>(?:(?!<\/form>)[\s\S])*?name=["']?(id_token|oauth_signature|lti_message_type|lti_message_hint|login_hint|SAMLResponse)\b/i.test(html);
+}
+
 function findMetaOrScriptRedirect(html: string): string | null {
   const meta = html.match(/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?\d+\s*;\s*url=([^"'>]+)/i);
   if (meta) return meta[1].replace(/&amp;/g, "&");
