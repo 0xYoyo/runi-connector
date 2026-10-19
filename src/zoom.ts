@@ -58,28 +58,35 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
   }
   const scid = page.html.match(/["']?scid["']?\s*:\s*["']([^"']+)["']/)?.[1];
   if (!scid) throw new Error("the Zoom page had no session id (scid)");
-  const xsrf = browser.jar
-    .headerFor(pageUrl)
-    .split("; ")
-    .find((c) => c.startsWith("XSRF-TOKEN="))
-    ?.slice("XSRF-TOKEN=".length);
+  // Read fresh each call: Zoom may set (or rotate) the token cookie on its API replies.
+  const xsrfFor = (url: URL) =>
+    browser.jar
+      .headerFor(url)
+      .split("; ")
+      .find((c) => c.startsWith("XSRF-TOKEN="))
+      ?.slice("XSRF-TOKEN=".length);
 
   const list = async (type: "upComing" | "history") => {
     const url = `${pageUrl.origin}/api/v1/lti/rich/meeting/${type}/COURSE/all?page=1&total=0&lti_scid=${encodeURIComponent(scid)}`;
-    const reply = await browser.request(url, {
-      referer: page.url,
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "X-Requested-With": "XMLHttpRequest",
-        ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
-      },
-    });
-    let data: unknown;
-    try {
-      data = JSON.parse(reply.text());
-    } catch {
-      throw new Error(`Zoom's meeting list answered HTTP ${reply.status} without data`);
-    }
+    const get = async () => {
+      const xsrf = xsrfFor(new URL(url));
+      const reply = await browser.request(url, {
+        referer: page.url,
+        headers: {
+          Accept: "application/json, text/plain, */*",
+          "X-Requested-With": "XMLHttpRequest",
+          ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
+        },
+      });
+      try {
+        return JSON.parse(reply.text()) as unknown;
+      } catch {
+        throw new Error(`Zoom's meeting list answered HTTP ${reply.status} without data`);
+      }
+    };
+    let data = await get();
+    // A CSRF refusal on the first call usually just set the token cookie: try once more with it.
+    if ((data as { errorCode?: unknown } | null)?.errorCode === "csrf") data = await get();
     const items = findList(data);
     return { items, data };
   };
@@ -93,7 +100,9 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
   const err = upcoming.data as { status?: unknown; errorCode?: unknown; errorMessage?: unknown; code?: unknown } | null;
   if (err && err.status === false) {
     // Zoom said no: report its own error code and message (no session data).
-    result.unrecognised = `Zoom error ${String(err.errorCode ?? err.code ?? "?")}: ${String(err.errorMessage ?? "").slice(0, 200)}`;
+    // Cookie names only (never values), to see which token Zoom expects.
+    const names = browser.jar.headerFor(pageUrl).split("; ").map((c) => c.split("=")[0]).filter(Boolean).join(",");
+    result.unrecognised = `Zoom error ${String(err.errorCode ?? err.code ?? "?")}: ${String(err.errorMessage ?? "").slice(0, 200)} (cookies: ${names || "none"})`;
     return result;
   }
   if (!upcoming.items) {
