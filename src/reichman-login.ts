@@ -114,10 +114,17 @@ export async function navigateThroughLogin(
   isDone: (page: Page) => boolean,
   maxSteps = 15,
 ): Promise<Page> {
+  const traceStart = browser.trace.length;
   let page = await browser.request(startUrl);
   let passwordHost: string | null = null; // host we sent the password to, once we have
   const visited: string[] = []; // host+path of each page (no query strings: they can hold tokens)
-  const route = () => visited.slice(-6).join(" → ");
+  // Every HTTP hop of this sign-in, redirects included: method, host+path and status only.
+  const route = () =>
+    browser.trace
+      .slice(traceStart)
+      .slice(-12)
+      .map((t) => `${t.method} ${t.host}${t.path} ${t.status}`)
+      .join(" → ");
 
   for (let step = 0; step < maxSteps; step++) {
     if (page.customSchemeRedirect || isDone(page)) return page;
@@ -146,7 +153,7 @@ export async function navigateThroughLogin(
       // the login page reloaded because two sign-ins overlapped) it's a retryable error.
       if (passwordHost) {
         if (WRONG_DETAILS.test(html)) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
-        throw new LoginError("unexpected_page", `Reichman showed its login page again (${host}, "${pageTitle(html)}").`, true);
+        throw new LoginError("unexpected_page", `Reichman showed its login page again (${host}, "${pageTitle(html)}"; route: ${route()}).`, true);
       }
       if (!safeToTypePassword(page.url, passwordForm)) {
         throw new LoginError("unexpected_page", `${host} asked for a password, but it isn't a secure Reichman login page, so it wasn't sent.`);
@@ -182,7 +189,7 @@ export async function navigateThroughLogin(
     if (passwordHost && WRONG_DETAILS.test(html)) throw new LoginError("bad_credentials", "The username or password was not accepted.", true);
     throw new LoginError(
       "unexpected_page",
-      `Stopped at an unexpected page (${new URL(page.url).host}${new URL(page.url).pathname}, "${pageTitle(html)}", HTTP ${page.status}).`,
+      `Stopped at an unexpected page (${new URL(page.url).host}${new URL(page.url).pathname}, "${pageTitle(html)}", HTTP ${page.status}; route: ${route()}).`,
       Boolean(passwordHost),
     );
   }

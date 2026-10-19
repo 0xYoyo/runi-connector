@@ -131,3 +131,16 @@ describe("the local sign-in page can't be impersonated or rebound", () => {
     expect(status).toBe(421);
   });
 });
+
+describe("sign-in error details", () => {
+  it("show the route (hosts, paths, statuses) but never query strings or the password", async () => {
+    const { fetchFn } = scripted({
+      "https://my.runi.ac.il/start": () => new Response(null, { status: 302, headers: { location: "https://idp.runi.ac.il/sso?SAMLRequest=secret-token" } }),
+      "https://idp.runi.ac.il/sso": () => html(`<html><head><title>BIG-IP ACL denied page</title></head><body>denied</body></html>`),
+    });
+    const error = await navigateThroughLogin(new Browser(fetchFn), "https://my.runi.ac.il/start", { username: "u", password: PASSWORD }, () => false).catch((e) => e);
+    expect(error.message).toContain("GET my.runi.ac.il/start 302 → GET idp.runi.ac.il/sso 200");
+    expect(error.message).not.toContain("secret-token");
+    expect(error.message).not.toContain(PASSWORD);
+  });
+});
