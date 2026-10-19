@@ -33,48 +33,72 @@ function parseMsDate(value: string | null): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+/** One way to sign in to Panopto: a Panopto login provider and the browser session to use. */
+export interface PanoptoRoute {
+  instance: string; // Panopto login provider, e.g. "MoodleProd2027" or "IDCPROD"
+  browser: () => Browser; // the session to sign in with (cookies must already be signed in, or creds work)
+  before?: (fresh: boolean) => Promise<void>; // e.g. make sure Moodle is signed in first
+}
+
 export class PanoptoClient {
   private authed = false;
+  private active?: Browser; // the session that got into Panopto
+  private readonly routes: PanoptoRoute[];
+
   constructor(
-    private readonly browser: Browser,
+    browserOrRoutes: Browser | PanoptoRoute[],
     private readonly moodleYear: number,
     private readonly host: string = PANOPTO_HOST,
     private readonly credentials?: () => Credentials | undefined,
-    // Reichman's gateway only lets a session into Panopto if the session was started at the
-    // Student Info Station (seen live), so sign in there first, in this same browser.
-    private readonly gatewaySignIn?: (fresh?: boolean) => Promise<void>,
-  ) {}
-
-  // Panopto signs in through the My RUNI gateway (SAML): its login page redirects there, and the
-  // gateway posts back with an auto-submitting form a plain HTTP client won't follow on its own.
-  // Walk that until we're back on a Panopto page that isn't the login page. If the gateway asks
-  // for the Reichman password on the way, it's typed only into Reichman pages.
-  private async ensureAuth() {
-    if (this.authed) return;
-    try {
-      await this.gatewaySignIn?.();
-      await this.walkLogin();
-    } catch (error) {
-      // A session the gateway won't let into Panopto ("access not found" / "ACL denied"): start
-      // a brand-new one (via the Student Info Station first) and try once more.
-      if (!(error instanceof LoginError) || error.code !== "unexpected_page") throw error;
-      this.browser.jar.clear();
-      await this.gatewaySignIn?.(true);
-      await this.walkLogin();
-    }
-    this.authed = true;
+  ) {
+    // Students sign in to Panopto through Moodle (provider MoodleProd{year}): Panopto asks Moodle,
+    // which already has a session. "RUNI Account" (IDCPROD) signs in but then answers "BIG-IP ACL
+    // denied" for a student (seen live 2026-10-19), so it's only a fallback.
+    this.routes = Array.isArray(browserOrRoutes)
+      ? browserOrRoutes
+      : [
+          { instance: `MoodleProd${moodleYear}`, browser: () => browserOrRoutes },
+          { instance: "IDCPROD", browser: () => browserOrRoutes },
+        ];
   }
 
-  private async walkLogin() {
+  private get browser(): Browser {
+    if (!this.active) throw new Error("Not signed in to Panopto.");
+    return this.active;
+  }
+
+  // Tries each sign-in route in turn; the first one that reaches Panopto signed in is kept.
+  private async ensureAuth() {
+    if (this.authed) return;
+    const errors: string[] = [];
+    for (const route of this.routes) {
+      try {
+        await route.before?.(false);
+        const browser = route.browser();
+        await this.walkLogin(browser, route.instance);
+        this.active = browser;
+        this.authed = true;
+        return;
+      } catch (error) {
+        if (!(error instanceof LoginError) || error.code !== "unexpected_page") throw error;
+        errors.push(`${route.instance}: ${error.message}`);
+      }
+    }
+    throw new LoginError("unexpected_page", `Couldn't sign in to Panopto (${errors.join(" | ")})`);
+  }
+
+  // Panopto's login page hands off to the provider (Moodle, or the My RUNI gateway via SAML), which
+  // answers with redirects or an auto-submitting form a plain HTTP client won't follow on its own.
+  // Walk that until we're back on a Panopto page, signed in. If a Reichman login page asks for the
+  // password on the way, it's typed only into Reichman pages.
+  private async walkLogin(browser: Browser, instance: string) {
     const creds = this.credentials?.() ?? { username: "", password: "" };
     const panoptoHost = new URL(this.host).host;
     await navigateThroughLogin(
-      this.browser,
-      // "IDCPROD" ("RUNI Account") is Panopto's Reichman sign-in. (The MoodleProd{year} providers
-      // only work when launched from inside Moodle; checked live 2026-10-16.)
+      browser,
       // `AllowBounce=true` is where Panopto's own page script sends the browser; it answers with a
-      // plain HTTP redirect to the gateway, so no script has to run (checked live, signed out).
-      `${this.host}/Panopto/Pages/Auth/Login.aspx?instance=IDCPROD&AllowBounce=true`,
+      // plain HTTP redirect to the provider, so no script has to run (checked live, signed out).
+      `${this.host}/Panopto/Pages/Auth/Login.aspx?instance=${encodeURIComponent(instance)}&AllowBounce=true`,
       creds,
       (page) => {
         const url = new URL(page.url);
@@ -91,6 +115,7 @@ export class PanoptoClient {
   // Signs in again on the next call (after the Moodle session was renewed).
   reset() {
     this.authed = false;
+    this.active = undefined;
   }
 
   async search(query: string, maxResults = 15): Promise<PanoptoSession[]> {

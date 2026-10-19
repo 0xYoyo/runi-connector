@@ -213,6 +213,18 @@ export function startMockReichman(
     // Panopto signs in via the My RUNI gateway (SAML, provider "IDCPROD"). Without a gateway
     // session the gateway shows a dead-end "access not found" page (seen live).
     if (url.pathname === "/Panopto/Pages/Auth/Login.aspx" && req.method === "GET") {
+      // Moodle provider: Panopto asks Moodle (block_panopto SSO), which answers for its logged-in user.
+      if (url.searchParams.get("instance") === "MoodleProd2027") {
+        if (url.searchParams.get("authCode") === "moodle-ok") {
+          const sid = crypto.randomUUID();
+          panoptoSessions.add(sid);
+          return send(200, `<html><body><form method="post" action="Login.aspx"><input type="hidden" name="__VIEWSTATE" value="vs">
+            <p>Provider: MoodleProd2027</p><a href="javascript:__doPostBack('ctl00$PageContentPlaceholder$loginControl$Logout','')">Sign out</a></form></body></html>`,
+            { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/Panopto` });
+        }
+        if (url.searchParams.get("AllowBounce") !== "true") return send(200, `<html><body><form method="post" action="./Login.aspx"><input type="hidden" name="__VIEWSTATE" value="vs"></form></body></html>`);
+        return redirect(`/moodle/blocks/panopto/SSO.php?serverName=panopto`);
+      }
       if (url.searchParams.get("instance") !== "IDCPROD") return redirect("/gw/F5Networks-SSO-Req");
       // Live: without AllowBounce, Panopto answers 200 with an ASP.NET page whose script bounces
       // the browser on; with it, a plain redirect to the gateway.
@@ -231,7 +243,8 @@ export function startMockReichman(
       // Seen live 2026-10-19: a session that STARTED at Panopto's SAML request signs in fine but is
       // then refused ("BIG-IP ACL denied"); a session started at the Student Info Station (yedion)
       // may go on to Panopto (seen in a browser 2026-10-16).
-      if (bound !== "yedion") return send(200, `<html><head><title>BIG-IP ACL denied page</title></head><body>Access denied</body></html>`);
+      // Seen live 2026-10-19: a student signs in fine but is then refused ("BIG-IP ACL denied").
+      return send(200, `<html><head><title>BIG-IP ACL denied page</title></head><body>Access denied</body></html>`);
       return send(200, `<html><body onload="document.forms[0].submit()">
         <form method="post" action="${base}/Panopto/Pages/Auth/Login.aspx"><input type="hidden" name="SAMLResponse" value="panopto-ok"><input type="hidden" name="RelayState" value="r"></form></body></html>`);
     }
@@ -245,6 +258,10 @@ export function startMockReichman(
       return send(200, `<html><body><form method="post" action="Login.aspx"><input type="hidden" name="__VIEWSTATE" value="vs">
         <p>Provider: unified</p><a href="javascript:__doPostBack('ctl00$PageContentPlaceholder$loginControl$Logout','')">Sign out</a></form></body></html>`,
         { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/Panopto` });
+    }
+    if (url.pathname === "/moodle/blocks/panopto/SSO.php") {
+      if (!moodleLoggedIn) return redirect("/moodle/login/index.php");
+      return redirect(`${base}/Panopto/Pages/Auth/Login.aspx?instance=MoodleProd2027&authCode=moodle-ok`);
     }
     if (url.pathname === "/Panopto/Pages/Home.aspx") return send(200, "<html><body>Panopto home</body></html>");
     if (url.pathname === "/Panopto/Services/Data.svc/GetSessions" && req.method === "POST") {

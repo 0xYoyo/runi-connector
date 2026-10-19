@@ -122,26 +122,28 @@ describe("Student Info Station", () => {
 });
 
 describe("Panopto", () => {
-  it("Panopto signs in via the Student Info Station first, and both work in the same session", async () => {
-    const browser = new Browser();
-    const michlol = new MichlolClient(browser, base, () => VALID_USER);
-    const panopto = new PanoptoClient(browser, 2027, base, () => VALID_USER, (fresh) => michlol.ensureSignedIn(fresh));
+  it("Panopto signs in through Moodle's session (MoodleProd provider) and finds recordings", async () => {
+    const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
+    const panopto = new PanoptoClient(browser, 2027, base, () => VALID_USER);
     expect((await panopto.search("probability"))[0]?.deliveryId).toBe("rec-5");
-    expect((await michlol.grades()).data.length).toBeGreaterThan(0);
   });
 
-  it("without that, a session started at Panopto is refused (ACL denied), as on the real site", async () => {
-    const panopto = new PanoptoClient(new Browser(), 2027, base, () => VALID_USER);
+  it("'RUNI Account' (IDCPROD) is refused for students (ACL denied), so it's only a fallback", async () => {
+    const panopto = new PanoptoClient([{ instance: "IDCPROD", browser: () => new Browser() }], 2027, base, () => VALID_USER);
     await expect(panopto.search("probability")).rejects.toThrow(/ACL denied/);
   });
 
-  it("a stale session is replaced: Student Info Station first, then Panopto, in a fresh one", async () => {
-    const browser = new Browser();
-    const michlol = new MichlolClient(browser, base, () => VALID_USER);
-    const panopto = new PanoptoClient(browser, 2027, base, () => VALID_USER, (fresh) => michlol.ensureSignedIn(fresh));
-    await michlol.grades();
-    browser.jar.clear(); // session lost on the server side
-    (michlol as any).authed = true; // client still thinks it's signed in
+  it("falls back to the next route when the first fails", async () => {
+    const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
+    const panopto = new PanoptoClient(
+      [
+        { instance: "IDCPROD", browser: () => new Browser() },
+        { instance: "MoodleProd2027", browser: () => browser },
+      ],
+      2027,
+      base,
+      () => VALID_USER,
+    );
     expect((await panopto.search("probability"))[0]?.deliveryId).toBe("rec-5");
   });
 });

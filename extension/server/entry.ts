@@ -191,7 +191,7 @@ async function main() {
     if (error instanceof LoginError && error.code === "mfa_required") {
       return new Error("Reichman asked for a second verification step, which the connector can't do yet.");
     }
-    if (error instanceof LoginError) return new Error(`Signing in to Reichman didn't complete (${error.message}). Try again in a minute.`);
+    if (error instanceof LoginError) return new Error(`Signing in to Reichman didn't complete (${error.message}). Try again in a minute. [connector v${runningVersion()}]`);
     return new Error(`Couldn't reach Reichman right now (${(error as Error).message}). Check the internet connection and try again.`);
   }
 
@@ -230,19 +230,32 @@ async function main() {
     return creds.reichmanRejected ? undefined : creds.reichman;
   };
 
-  // Panopto and the Student Info Station share ONE gateway browser session, separate from
-  // Moodle's. Reichman's gateway only admits a session into Panopto if that session started at the
-  // Student Info Station, and a session started at Panopto is refused everywhere (seen live), so
-  // Panopto always signs in via the Student Info Station first.
+  // The Student Info Station has its own gateway session (My RUNI ties a gateway session to the
+  // service it was opened for). Panopto signs in through Moodle's session (provider
+  // MoodleProd{year}); "RUNI Account" via the gateway is only a fallback (ACL-denied for students).
   let gatewayClients: { panopto: PanoptoClient; michlol: MichlolClient } | null = null;
   const resetGatewayClients = () => (gatewayClients = null);
   const clientsFor = () => {
     if (!gatewayClients) {
-      const browser = new Browser();
-      const michlolClient = new MichlolClient(browser, michlolHost, reichmanCreds);
+      const gatewayBrowser = new Browser();
+      const michlolClient = new MichlolClient(gatewayBrowser, michlolHost, reichmanCreds);
       gatewayClients = {
         michlol: michlolClient,
-        panopto: new PanoptoClient(browser, moodleYear(), panoptoHost, reichmanCreds, (fresh) => michlolClient.ensureSignedIn(fresh)),
+        panopto: new PanoptoClient(
+          [
+            {
+              get instance() {
+                return `MoodleProd${moodleYear()}`; // known once Moodle has signed in (before runs first)
+              },
+              browser: needBrowser,
+              before: async () => void (await ensureReichman()),
+            },
+            { instance: "IDCPROD", browser: () => gatewayBrowser, before: (fresh) => michlolClient.ensureSignedIn(fresh) },
+          ],
+          moodleYear(),
+          panoptoHost,
+          reichmanCreds,
+        ),
       };
     }
     return gatewayClients;
