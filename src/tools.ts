@@ -418,10 +418,18 @@ export function buildServer(
           : pool;
         // Some courses link their slides on Google Drive from the section text instead of uploading
         // them (Digital Systems, seen 2026-10-19). Those count as course files too.
+        // Assignment descriptions too (Digital Systems links each project's instructions there).
+        const assignmentIntros = options.fetchPublicFile && !section
+          ? await requireMoodle()
+              .call<{ courses: Array<{ assignments: Array<{ intro?: string }> }> }>("mod_assign_get_assignments", { courseids: [found.id] })
+              .then((r) => (r.courses[0]?.assignments ?? []).map((a) => a.intro ?? "").join(" "))
+              .catch(() => "")
+          : "";
         const driveFiles = options.fetchPublicFile
           ? sections
               .filter((s) => !section || (s.name ?? "").toLowerCase().includes(section.toLowerCase()))
               .flatMap((s) => driveLinks([s.summary, ...s.modules.map((m) => m.description ?? "")].join(" ")))
+              .concat(driveLinks(assignmentIntros))
               .filter((d) => !files?.length || files.some((f) => d.fileurl === f || d.filename.toLowerCase().includes(f.toLowerCase())))
           : [];
         const unique = [...new Map([...wanted, ...driveFiles].map((c) => [c.fileurl, c])).values()];

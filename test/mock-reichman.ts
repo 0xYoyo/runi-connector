@@ -203,7 +203,7 @@ export function startMockReichman(
         return json(fn === "mod_forum_add_discussion" ? { discussionid: 9002, warnings: [] } : { postid: 7003, warnings: [] });
       }
       if (fn === "mod_assign_get_assignments")
-        return json({ courses: [{ id: 2701328, assignments: [{ id: 301, name: "HW1 - Graphs", duedate: 1760500000 }, { id: 302, name: "HW2 - Trees", duedate: 1761500000 }] }] });
+        return json({ courses: [{ id: 2701328, assignments: [{ id: 301, name: "HW1 - Graphs", duedate: 1760500000, intro: `<p>READ: <a href="https://drive.google.com/open?id=1MY1buFHo_Wx5DPrKhCNSA2cm5ltwFJzMxx&amp;usp=drive_fs">Project 1</a></p>` }, { id: 302, name: "HW2 - Trees", duedate: 1761500000 }] }] });
       if (fn === "mod_assign_get_submission_status")
         return json(
           body.get("assignid") === "301"
