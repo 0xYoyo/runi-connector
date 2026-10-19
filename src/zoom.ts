@@ -66,6 +66,24 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
       .find((c) => c.startsWith("XSRF-TOKEN="))
       ?.slice("XSRF-TOKEN=".length);
 
+  // Zoom's own anti-forgery token, as on its other sites: POST /csrf_js answers
+  // "ZOOM-CSRFTOKEN:<token>" (or a token in the page itself); it's sent back as a header.
+  let zoomCsrf: string | undefined =
+    page.html.match(/["'](?:csrfToken|csrf_token|zmCsrfToken)["']\s*:\s*["']([^"']+)["']/)?.[1] ??
+    page.html.match(/<meta[^>]+name=["']csrf-token["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  if (!zoomCsrf) {
+    try {
+      const reply = await browser.request(`${pageUrl.origin}/csrf_js`, {
+        method: "POST",
+        referer: page.url,
+        headers: { "FETCH-CSRF-TOKEN": "1", "X-Requested-With": "XMLHttpRequest", Accept: "*/*" },
+      });
+      zoomCsrf = reply.text().match(/ZOOM-CSRFTOKEN\s*:\s*([\w-]+)/i)?.[1];
+    } catch {
+      /* not available here */
+    }
+  }
+
   const list = async (type: "upComing" | "history") => {
     const url = `${pageUrl.origin}/api/v1/lti/rich/meeting/${type}/COURSE/all?page=1&total=0&lti_scid=${encodeURIComponent(scid)}`;
     const get = async () => {
@@ -76,6 +94,7 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
           Accept: "application/json, text/plain, */*",
           "X-Requested-With": "XMLHttpRequest",
           ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
+          ...(zoomCsrf ? { "ZOOM-CSRFTOKEN": zoomCsrf } : {}),
         },
       });
       try {
@@ -102,7 +121,13 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
     // Zoom said no: report its own error code and message (no session data).
     // Cookie names only (never values), to see which token Zoom expects.
     const names = browser.jar.headerFor(pageUrl).split("; ").map((c) => c.split("=")[0]).filter(Boolean).join(",");
-    result.unrecognised = `Zoom error ${String(err.errorCode ?? err.code ?? "?")}: ${String(err.errorMessage ?? "").slice(0, 200)} (cookies: ${names || "none"})`;
+    // Names only (never values): which settings the page declares and which tags it has.
+    const confKeys = [...new Set([...page.html.matchAll(/["']([A-Za-z_]{3,40})["']\s*:/g)].map((m) => m[1]))].slice(0, 60).join(",");
+    const metas = [...page.html.matchAll(/<meta[^>]+name=["']([^"']+)["']/gi)].map((m) => m[1]).join(",");
+    const inline = [...page.html.matchAll(/<script(?![^>]*src)[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1].length).join(",");
+    result.unrecognised =
+      `Zoom error ${String(err.errorCode ?? err.code ?? "?")}: ${String(err.errorMessage ?? "").slice(0, 200)} ` +
+      `(cookies: ${names || "none"}; csrf token: ${zoomCsrf ? "found" : "none"}; page keys: ${confKeys || "-"}; meta: ${metas || "-"}; inline scripts: ${inline || "-"})`;
     return result;
   }
   if (!upcoming.items) {
