@@ -8,6 +8,8 @@
 // child that crashes is restarted (falling back to the built-in version if it keeps crashing).
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { PassThrough, type Readable } from "node:stream";
+import { testOverride } from "../../src/test-mode";
 import { downloadLatest, markBad, markHealthy, pickDownloadedVersion } from "./updates";
 
 type Line = string;
@@ -25,6 +27,12 @@ export interface SupervisorOptions {
   log: (...parts: unknown[]) => void;
   checkEveryMs: number; // periodic update check
   updates: boolean; // false: never look for updates (tests, RUNI_NO_SELF_UPDATE)
+  /**
+   * Serves the connector in this process instead, reading client messages from `input`. Used when
+   * a child process can't be started here, so the connector always answers (without hot updates).
+   */
+  runInProcess: (input: Readable) => Promise<void>;
+  startupTimeoutMs?: number; // how long the first child gets to answer the client's hello
 }
 
 // Splits a stream into lines.
@@ -59,14 +67,23 @@ export function supervise(options: SupervisorOptions) {
   const best = (): { file: string; version: string } =>
     (options.updates && pickDownloadedVersion(options.dataDir, options.selfVersion)) || { file: options.selfPath, version: options.selfVersion };
 
+  // Claude Desktop runs extensions on its own built-in Node.js (Electron). Its program only acts
+  // as Node when told so; otherwise a child would start as an app and never answer.
+  const childEnv = { ...process.env, RUNI_CHILD: "1", ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) };
+
   function start(file: string, version: string): Child {
-    const proc = spawn(process.execPath, [file], {
-      env: { ...process.env, RUNI_CHILD: "1" },
+    // Tests can swap the program, to simulate one that hangs or can't run.
+    const proc = spawn(testOverride("RUNI_CHILD_EXEC") ?? process.execPath, [file], {
+      env: childEnv,
       stdio: ["pipe", "pipe", "inherit"],
     });
     const child: Child = { proc, version, file };
     onLines(proc.stdout!, (line) => fromChild(child, line));
     proc.on("exit", (code) => onChildExit(child, code));
+    proc.on("error", (error) => {
+      log(`couldn't start the connector process: ${error.message}`);
+      if (!everAnswered) fallBackInProcess();
+    });
     proc.stdin!.on("error", () => {}); // a dying child must not take the launcher down
     return child;
   }
@@ -75,8 +92,29 @@ export function supervise(options: SupervisorOptions) {
     child.proc.stdin!.write(line + "\n");
   }
 
+  // Until a child has answered the client's hello, keep everything the client sent, so that if
+  // children can't run here, the connector can be served in this process from the start.
+  let everAnswered = false;
+  let inProcess: PassThrough | null = null;
+  const earlyLines: Line[] = [];
+  function fallBackInProcess() {
+    if (inProcess || everAnswered) return;
+    log("serving the connector in this process (child processes don't work here); updates apply at the next start");
+    inProcess = new PassThrough();
+    shuttingDown = true; // stop restarting children
+    current?.proc.kill();
+    for (const line of earlyLines) inProcess.write(line + "\n");
+    earlyLines.length = 0;
+    void options.runInProcess(inProcess);
+  }
+
   // --- messages from Claude ---
   onLines(process.stdin, (line) => {
+    if (inProcess) {
+      inProcess.write(line + "\n");
+      return;
+    }
+    if (!everAnswered) earlyLines.push(line);
     let message: { id?: unknown; method?: string } | null = null;
     try {
       message = JSON.parse(line);
@@ -86,6 +124,14 @@ export function supervise(options: SupervisorOptions) {
     if (message?.method === "initialize") {
       initializeLine = line;
       initializeId = idKey(message.id);
+      if (!everAnswered) {
+        setTimeout(() => {
+          if (!everAnswered) {
+            log(`the connector process didn't answer within ${(options.startupTimeoutMs ?? 15_000) / 1000}s`);
+            fallBackInProcess();
+          }
+        }, options.startupTimeoutMs ?? 15_000).unref();
+      }
     }
     if (message?.method === "notifications/initialized") initializedLine = line;
     if (message?.method && message.id !== undefined) pending.add(idKey(message.id));
@@ -93,6 +139,7 @@ export function supervise(options: SupervisorOptions) {
     if (message?.method && message.id !== undefined) void maybeCheckForUpdate();
   });
   process.stdin.on("end", () => {
+    if (inProcess) return inProcess.end();
     shuttingDown = true;
     current?.proc.kill();
     process.exit(0);
@@ -116,6 +163,8 @@ export function supervise(options: SupervisorOptions) {
       pending.delete(idKey(message.id));
       // The connector answered Claude's hello: this version works.
       if (idKey(message.id) === initializeId && message.result) {
+        everAnswered = true;
+        earlyLines.length = 0;
         markHealthy(options.dataDir, child.version);
         if (process.env.RUNI_LAUNCHED) markHealthy(options.dataDir, process.env.RUNI_LAUNCHED);
       }
@@ -145,6 +194,16 @@ export function supervise(options: SupervisorOptions) {
 
   function onChildExit(child: Child, code: number | null) {
     if (shuttingDown || child !== current || swapping) return;
+    // Never got going. A downloaded version: rule it out and start the built-in one, replaying what
+    // the client sent. The built-in one: children don't work here, so serve in this process.
+    if (!everAnswered) {
+      if (child.file === options.selfPath) return fallBackInProcess();
+      markBad(options.dataDir, child.version);
+      log(`v${child.version} stopped before answering; marked bad, using the built-in v${options.selfVersion}`);
+      current = start(options.selfPath, options.selfVersion);
+      for (const line of earlyLines) send(current, line);
+      return;
+    }
     log(`connector v${child.version} stopped (code ${code}); restarting it`);
     // Requests it was handling won't get an answer: tell Claude so it can retry.
     for (const key of pending) {

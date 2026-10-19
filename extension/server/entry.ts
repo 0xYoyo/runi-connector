@@ -157,7 +157,7 @@ async function readLocalFile(path: string): Promise<{ name: string; bytes: Uint8
   return { name: basename(real), bytes: new Uint8Array(readFileSync(real)) };
 }
 
-async function main() {
+async function main(input?: import("node:stream").Readable) {
   const cache = fileCache();
   const ref: { session: Session | null } = { session: null };
 
@@ -520,7 +520,7 @@ async function main() {
   );
 
   // Answer Claude right away; sign in in the background (tools wait for it if they need it).
-  await server.connect(new StdioServerTransport());
+  await server.connect(input ? new StdioServerTransport(input, process.stdout) : new StdioServerTransport());
   const version = runningVersion();
   log(`ready (v${version})`);
   const saved = loadCredentials();
@@ -549,6 +549,8 @@ async function start() {
     log,
     checkEveryMs: interval,
     updates: selfUpdate,
+    runInProcess: (input) => main(input),
+    startupTimeoutMs: Number(testOverride("RUNI_STARTUP_TIMEOUT_MS")) || undefined,
   });
 }
 
