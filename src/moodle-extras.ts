@@ -82,6 +82,28 @@ export function zoomLinks(text: string): string[] {
   return [...new Set((text.match(ZOOM_LINK) ?? []).map((l) => l.replace(/&amp;/g, "&").replace(/[.,;]+$/, "")))];
 }
 
+/**
+ * A short, token-free description of a page an external tool returned (address without its query
+ * values, title, which query parameters it had, scripts and API paths it references). Used to see
+ * what a tool like Zoom's shows, without exposing session data.
+ */
+export function describePage(url: string, html: string): string {
+  const u = new URL(url);
+  const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "").trim().slice(0, 80);
+  const scripts = [...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map((m) => m[1].split("?")[0]).slice(0, 6);
+  const apis = [...new Set([...html.matchAll(/["'](\/(?:api|lti)\/[\w\/.-]{3,80})/g)].map((m) => m[1]))].slice(0, 12);
+  const keys = [...new Set([...html.matchAll(/window\.(__\w+__|\w*(?:state|config|data)\w*)\s*=/gi)].map((m) => m[1]))].slice(0, 8);
+  return [
+    `${u.host}${u.pathname}`,
+    `params: ${[...u.searchParams.keys()].join(",") || "-"}`,
+    `title: "${title}"`,
+    `${html.length} bytes`,
+    `scripts: ${scripts.join(" ") || "-"}`,
+    `api paths: ${apis.join(" ") || "-"}`,
+    `globals: ${keys.join(",") || "-"}`,
+  ].join("; ");
+}
+
 const readOnly = { readOnlyHint: true, openWorldHint: false };
 const courseArg = z.string().describe("Course name, number or Moodle id");
 
@@ -303,10 +325,16 @@ export function registerMoodleExtras(server: McpServer, ctx: ExtrasContext) {
                 const meetings = moodlePageText(page.html).slice(0, 3000);
                 lines.push(
                   `- ${m.name} (Zoom activity): ${links.length ? links.join(", ") : "no join links on the page"}` +
-                    (meetings ? `\n  Page text: ${meetings.replace(/\n/g, " · ")}` : ""),
+                    (meetings ? `\n  Page text: ${meetings.replace(/\n/g, " · ")}` : "") +
+                    (links.length ? "" : `\n  (page: ${describePage(page.url, page.html)})`),
                 );
               } catch (error) {
-                lines.push(`- ${m.name} (Zoom activity): couldn't open it (${(error as Error).message})`);
+                const message = (error as Error).message;
+                lines.push(
+                  /went in circles/.test(message)
+                    ? `- ${m.name} (Zoom activity): doesn't open any more (probably left over from an earlier year)`
+                    : `- ${m.name} (Zoom activity): couldn't open it (${message})`,
+                );
               }
             }
           }
