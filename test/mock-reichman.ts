@@ -175,6 +175,7 @@ export function startMockReichman(
             modules: [
               { id: 21, name: "Panopto 2027", modname: "lti", url: `${base}/moodle/mod/lti/view.php?id=21` },
               { id: 22, name: "Zoom 2027", modname: "lti", url: `${base}/moodle/mod/lti/view.php?id=22` },
+              { id: 25, name: "Recitation 1 - Intro &amp; Toposort", modname: "resource", url: `${base}/moodle/mod/resource/view.php?id=25`, contents: [{ type: "file", filename: "rec1.pdf", filesize: 1024, fileurl: `${base}/moodle/webservice/pluginfile.php/2/mod_resource/content/0/rec1.pdf` }] },
               { id: 24, name: "Recitation Zoom", modname: "url", url: `${base}/moodle/mod/url/view.php?id=24`, contents: [{ type: "url", filename: "x", filesize: 0, fileurl: "https://runi.zoom.us/j/444555666" }] },
               { id: 23, name: "Attendance", modname: "attendance", url: `${base}/moodle/mod/attendance/view.php?id=23` },
             ],
@@ -261,15 +262,44 @@ export function startMockReichman(
       panoptoSessions.add(sid);
       return send(200, `<html><body><h1>Algorithms recordings</h1></body></html>`, { "Set-Cookie": `.ASPXAUTH=${sid}; Path=/Panopto` });
     }
+    // Like Zoom's real LTI app (seen live 2026-10-19): a JavaScript page with the session id in
+    // window.appConf, an XSRF-TOKEN cookie, and a JSON meetings API that needs both.
     if (url.pathname === "/zoomlti/lti/launch" && req.method === "POST") {
       const body = await readBody(req);
       if (body.get("id_token") !== "jwt-22") return send(400, "bad token");
-      return send(200, `<html><body><div role="main"><table><tr><td>Algorithms lecture</td><td>Sun 10:00</td><td><a href="https://runi.zoom.us/j/999888777?pwd=zz">Join</a></td></tr></table></div></body></html>`);
+      return send(
+        200,
+        `<html><head><title>Rich LTI</title></head><body><div id="app"></div><script>window.appConf = {"page":{"scid":"scid-123","enablePersonalMeetingId":false}};</script>
+        <script src="https://vaapplicationscontent.zoom.us/edu/lti/static/x/lti/scripts/main.js"></script></body></html>`,
+        { "Set-Cookie": ["XSRF-TOKEN=xsrf%2Fabc; Path=/", "zm_lti=s1; Path=/; HttpOnly"] },
+      );
+    }
+    if (url.pathname.startsWith("/api/v1/lti/rich/meeting/")) {
+      if (url.searchParams.get("lti_scid") !== "scid-123" || req.headers["x-xsrf-token"] !== "xsrf/abc" || jar.zm_lti !== "s1") {
+        return send(401, JSON.stringify({ status: false, errorCode: 401 }), { "Content-Type": "application/json" });
+      }
+      const upcoming = url.pathname.includes("/upComing/");
+      return send(
+        200,
+        JSON.stringify({
+          status: true,
+          errorCode: 0,
+          result: {
+            total: 1,
+            list: upcoming
+              ? [{ topic: "Algorithms lecture", startTime: "Mon 26 Oct 11:30", duration: 150, meetingNumber: "999888777", joinUrl: "https://runi.zoom.us/j/999888777?pwd=zz" }]
+              : [{ topic: "Algorithms lecture (last week)", startTime: "Mon 19 Oct 11:30", meetingNumber: "999888777" }],
+          },
+        }),
+        { "Content-Type": "application/json" },
+      );
     }
     if (url.pathname === "/moodle/mod/attendance/view.php") {
       if (!moodleLoggedIn) return redirect("/moodle/login/index.php");
-      return send(200, `<html><body><header>menu</header><div role="main"><h2>Attendance</h2><table>
-        <tr><th>Date</th><th>Status</th></tr><tr><td>Sun 12 Oct</td><td>Present</td></tr><tr><td>Sun 19 Oct</td><td>Absent</td></tr></table></div><footer>f</footer></body></html>`);
+      // Like real Moodle 4: the main region is followed by the accessibility menu and a footer.
+      return send(200, `<html><body><header>menu</header><div role="main"><h2>Attendance</h2><div><table>
+        <tr><th>Date</th><th>Status</th></tr><tr><td>Sun 12 Oct</td><td>Present</td></tr><tr><td>Sun 19 Oct</td><td>Absent</td></tr></table></div></div>
+        <div class="accessibility">Font Kerning <a href="${base}/moodle/local/accessibility/resetall.php?sesskey=SECRETKEY">Reset All</a></div><footer>f</footer></body></html>`);
     }
     if (url.pathname.startsWith("/moodle/webservice/pluginfile.php/")) {
       if (url.searchParams.get("token") !== MOODLE_TOKEN) return send(403, "nope");
@@ -515,7 +545,7 @@ export function startMockReichman(
       if (!csrf || req.headers["csrf-token"] !== csrf) return json({ result: null, error: "Not logged in" });
       if (url.searchParams.get("method") !== body.method) return json({ result: null, error: "method mismatch" });
       if (body.method === "user.status")
-        return json({ result: { networks: [{ id: "net1", name: "Advanced Programming", course_number: "3030", term: "Fall 2026" }] }, error: null });
+        return json({ result: { networks: [{ id: "net1", name: "Advanced Programming", course_number: "3030", term: "Fall 2026" }, { id: "net2", name: "Algorithms", course_number: "CS 77", term: "Winter 2027" }] }, error: null });
       if (body.method === "network.search")
         return json({ result: [{ id: "p1", nr: 12, subject: "HW2 <b>deadline</b>", type: "question" }], error: null });
       if (body.method === "content.get")

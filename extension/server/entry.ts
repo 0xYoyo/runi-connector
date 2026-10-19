@@ -22,6 +22,7 @@ import { PanoptoClient, srtToText } from "../../src/panopto";
 import { PiazzaAuthError, PiazzaClient } from "../../src/piazza";
 import { isHandOffPage, LoginError, navigateThroughLogin, signInToMoodle, type Credentials } from "../../src/reichman-login";
 import { PendingActions } from "../../src/actions";
+import { zoomMeetings } from "../../src/zoom";
 import { moodlePageText } from "../../src/moodle-extras";
 import { DEFAULT_SYLLABUS_URL, harvestSyllabi } from "../../src/syllabi";
 import { buildServer, NotConnectedError, type MichlolLike, type PanoptoLike, type PiazzaLike, type UserProps } from "../../src/tools";
@@ -456,6 +457,7 @@ async function main(input?: import("node:stream").Readable) {
     readMoodlePage,
     readLocalFile,
     launchLti,
+    zoomMeetings: async (cmid: number) => zoomMeetings(needBrowser(), await launchLti(cmid)),
     actions: new PendingActions(),
   });
 

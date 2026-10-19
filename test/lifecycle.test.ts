@@ -109,6 +109,8 @@ run("account lifecycle", () => {
     expect(await res.json()).toMatchObject({ ok: true });
     expect(text(await client.callTool({ name: "piazza_list_classes", arguments: {} }))).toContain("Advanced Programming (3030)");
     expect(text(await client.callTool({ name: "piazza_search", arguments: { course: "3030", query: "HW2" } }))).toContain("@12");
+    // Piazza calls Algorithms "CS 77"; "77" must still find it (seen live 2026-10-19).
+    expect(text(await client.callTool({ name: "piazza_search", arguments: { course: "77", query: "HW2" } }))).not.toMatch(/No Piazza class matches/);
   });
 
   it("timetable and exams come back readable, without the ID number", async () => {

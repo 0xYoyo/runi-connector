@@ -126,7 +126,13 @@ export class PiazzaClient {
   async findClass(query: string): Promise<PiazzaClass | undefined> {
     const q = query.trim().toLowerCase();
     const all = await this.classes();
-    return all.find((c) => c.num === q) ?? all.find((c) => c.name.toLowerCase().includes(q));
+    // Piazza course numbers look like "CS 77" or "3030"; "77" should find "CS 77".
+    const digits = (v: string) => v.replace(/\D/g, "");
+    return (
+      all.find((c) => c.num.toLowerCase() === q) ??
+      (digits(q) ? all.find((c) => digits(c.num) === digits(q)) : undefined) ??
+      all.find((c) => c.name.toLowerCase().includes(q) || c.num.toLowerCase().includes(q))
+    );
   }
 
   async feed(classId: string, limit = 25): Promise<PiazzaPost[]> {

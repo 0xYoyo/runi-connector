@@ -42,25 +42,42 @@ export interface ExtrasContext {
   readMoodlePage?: (url: string) => Promise<string>;
   /** Opens a Moodle external-tool (LTI) activity like clicking it; returns the tool's page (local only). */
   launchLti?: (cmid: number) => Promise<{ url: string; html: string }>;
+  /** Meetings listed in a course's Zoom activity (local only). */
+  zoomMeetings?: (cmid: number) => Promise<import("./zoom").ZoomMeetings>;
   /** Reads a file from the student's computer, for submissions (local versions only). */
   readLocalFile?: (path: string) => Promise<{ name: string; bytes: Uint8Array }>;
   /** Present only where changing things is allowed (local versions). */
   actions?: PendingActions;
 }
 
+// The page's main region only (Moodle's role="main" element, matched to its closing tag), without
+// the navigation, accessibility menu and footer around it.
+function mainRegion(html: string): string {
+  const open = html.match(/<(div|section)\b[^>]*(?:role=["']main["']|id=["']region-main["'])[^>]*>/i);
+  if (!open || open.index === undefined) return html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html;
+  const tag = open[1].toLowerCase();
+  const re = new RegExp(`<${tag}\\b|<\\/${tag}>`, "gi");
+  re.lastIndex = open.index + open[0].length;
+  let depth = 1;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    depth += m[0].startsWith("</") ? -1 : 1;
+    if (depth === 0) return html.slice(open.index + open[0].length, m.index);
+  }
+  return html.slice(open.index + open[0].length);
+}
+
 /** The readable text of a Moodle page: its main region, with table rows kept on one line each. */
 export function moodlePageText(html: string): string {
-  const main =
-    html.match(/<div[^>]+role=["']main["'][^>]*>([\s\S]*)/i)?.[1] ??
-    html.match(/<section[^>]+id=["']region-main["'][^>]*>([\s\S]*)/i)?.[1] ??
-    html.match(/<body[^>]*>([\s\S]*)/i)?.[1] ??
-    html;
+  const main = mainRegion(html);
   return main
     .replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, "")
     .replace(/<footer[\s\S]*$/i, "")
     .replace(/<\/t[dh]>\s*/gi, " | ")
     .replace(/<\/tr>/gi, "\n")
-    .replace(/<a\b[^>]*href=["'](https?:[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href: string, label: string) => `${label} (${href.replace(/&amp;/g, "&")})`)
+    // Keep link targets, except action links carrying the session key (never show that).
+    .replace(/<a\b[^>]*href=["'](https?:[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href: string, label: string) =>
+      /sesskey/i.test(href) ? label : `${label} (${href.replace(/&amp;/g, "&")})`,
+    )
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/(p|div|li|h\d|section)>/gi, "\n")
     .replace(/<[^>]+>/g, "")
@@ -316,24 +333,24 @@ export function registerMoodleExtras(server: McpServer, ctx: ExtrasContext) {
             for (const link of zoomLinks(blob)) lines.push(`- ${m.name}: ${link}`);
           }
         }
-        if (ctx.launchLti) {
+        if (ctx.zoomMeetings) {
           for (const s of sections) {
             for (const m of s.modules.filter((m) => m.modname === "lti" && /zoom/i.test(m.name))) {
               try {
-                const page = await ctx.launchLti(m.id);
-                const links = zoomLinks(page.html);
-                const meetings = moodlePageText(page.html).slice(0, 3000);
+                const z = await ctx.zoomMeetings(m.id);
+                const fmt = (x: { topic: string; when: string; joinUrl: string | null }) => `    • ${x.topic}${x.when ? ` — ${x.when}` : ""}${x.joinUrl ? ` — ${x.joinUrl}` : ""}`;
                 lines.push(
-                  `- ${m.name} (Zoom activity): ${links.length ? links.join(", ") : "no join links on the page"}` +
-                    (meetings ? `\n  Page text: ${meetings.replace(/\n/g, " · ")}` : "") +
-                    (links.length ? "" : `\n  (page: ${describePage(page.url, page.html)})`),
+                  `- ${m.name} (Zoom activity): ${z.upcoming.length ? `${z.upcoming.length} upcoming meeting(s)` : "no upcoming meetings listed"}` +
+                    (z.upcoming.length ? "\n" + z.upcoming.map(fmt).join("\n") : "") +
+                    (z.previous.length ? `\n  Recent:\n${z.previous.map(fmt).join("\n")}` : "") +
+                    (z.unrecognised ? `\n  (Zoom answered in an unexpected format: ${z.unrecognised})` : ""),
                 );
               } catch (error) {
                 const message = (error as Error).message;
                 lines.push(
                   /went in circles/.test(message)
                     ? `- ${m.name} (Zoom activity): doesn't open any more (probably left over from an earlier year)`
-                    : `- ${m.name} (Zoom activity): couldn't open it (${message})`,
+                    : `- ${m.name} (Zoom activity): couldn't read it (${message})`,
                 );
               }
             }

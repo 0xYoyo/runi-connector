@@ -133,6 +133,8 @@ export interface BuildOptions {
   readMoodlePage?: (url: string) => Promise<string>;
   /** Opens a Moodle external-tool (LTI) activity by its id, like clicking it (local versions only). */
   launchLti?: (cmid: number) => Promise<{ url: string; html: string }>;
+  /** Meetings listed in a course's Zoom activity (local versions only). */
+  zoomMeetings?: (cmid: number) => Promise<import("./zoom").ZoomMeetings>;
   /** Reads a file from the student's computer, for assignment submissions (local versions only). */
   readLocalFile?: (path: string) => Promise<{ name: string; bytes: Uint8Array }>;
   /** Enables actions that change things (each needs a confirmed preview; local versions only). */
@@ -231,8 +233,17 @@ export function buildServer(
     return course;
   }
 
-  const contents = (courseId: number) =>
-    requireMoodle().call<CourseSection[]>("core_course_get_contents", { courseid: courseId });
+  // Moodle returns names HTML-escaped ("Introduction &amp; Topological Sort"): unescape them once here.
+  const unescapeName = (name: string) =>
+    name.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'");
+  const contents = async (courseId: number) => {
+    const sections = await requireMoodle().call<CourseSection[]>("core_course_get_contents", { courseid: courseId });
+    for (const section of sections) {
+      section.name = unescapeName(section.name ?? "");
+      for (const mod of section.modules) mod.name = unescapeName(mod.name ?? "");
+    }
+    return sections;
+  };
 
   server.registerTool(
     "list_courses",
@@ -337,9 +348,11 @@ export function buildServer(
       if (!/^https?:\/\//.test(file)) {
         if (!course) return failure("Give the course too when `file` is a name rather than a URL.");
         const found = await resolveCourse(course);
-        const all = (await contents(found.id)).flatMap((s) => s.modules.flatMap((m) => m.contents ?? []));
+        const modules = (await contents(found.id)).flatMap((s) => s.modules);
+        const files = modules.flatMap((m) => (m.contents ?? []).filter((c) => c.type === "file").map((c) => ({ file: c, title: m.name })));
         const needle = file.toLowerCase();
-        const match = all.find((c) => c.type === "file" && c.filename.toLowerCase().includes(needle));
+        // By file name first, then by the activity's title as shown on the course page.
+        const match = (files.find((f) => f.file.filename.toLowerCase().includes(needle)) ?? files.find((f) => f.title.toLowerCase().includes(needle)))?.file;
         if (!match) return failure(`No file matching "${file}" in ${found.fullname}.`);
         fileUrl = match.fileurl;
         filename = match.filename;
@@ -760,6 +773,7 @@ export function buildServer(
     readMoodlePage: options.readMoodlePage,
     readLocalFile: options.readLocalFile,
     launchLti: options.launchLti,
+    zoomMeetings: options.zoomMeetings,
     actions: options.actions,
   });
 

@@ -76,6 +76,14 @@ run("more of Moodle", () => {
     const att = await call("get_attendance", { course: "77" });
     expect(att).toContain("Sun 19 Oct | Absent");
     expect(att).not.toContain("menu");
+    expect(att).not.toContain("Font Kerning");
+    expect(att).not.toContain("SECRETKEY");
+  });
+
+  it("course names are unescaped; files open by their title too", async () => {
+    expect(await call("get_course_contents", { course: "77" })).toContain("Recitation 1 - Intro & Toposort");
+    const byTitle = await call("read_course_file", { course: "77", file: "Toposort" });
+    expect(byTitle).toContain("rec1.pdf");
   });
 
   it("reads Moodle pages only on Moodle", async () => {
@@ -87,7 +95,9 @@ run("more of Moodle", () => {
     const zoom = await call("get_zoom_links", { course: "77" });
     expect(zoom).toContain("https://runi.zoom.us/j/111222333?pwd=abc&x=1");
     expect(zoom).toContain("https://runi.zoom.us/j/444555666");
-    expect(zoom).toContain("https://runi.zoom.us/j/999888777?pwd=zz");
+    expect(zoom).toContain("1 upcoming meeting(s)");
+    expect(zoom).toContain("Algorithms lecture — Mon 26 Oct 11:30 (150 min) — https://runi.zoom.us/j/999888777?pwd=zz");
+    expect(zoom).toContain("Algorithms lecture (last week)");
   });
 
   it("Panopto signs in through the course's Panopto activity", async () => {
