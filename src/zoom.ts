@@ -84,6 +84,12 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
     }
   }
 
+  // The headers Zoom's app sends on every API call, from window.appConf.ajaxHeaders
+  // ([{key: "X-XSRF-TOKEN", value: "…"}, …]; found in its main.js 2026-10-19).
+  const ajaxHeaders: Record<string, string> = {};
+  const block = page.html.match(/ajaxHeaders["']?\s*[:=]\s*(\[[\s\S]*?\])/)?.[1] ?? "";
+  for (const m of block.matchAll(/["']?key["']?\s*:\s*["']([\w-]+)["']\s*,\s*["']?value["']?\s*:\s*["']([^"']*)["']/g)) ajaxHeaders[m[1]] = m[2];
+
   const list = async (type: "upComing" | "history") => {
     const url = `${pageUrl.origin}/api/v1/lti/rich/meeting/${type}/COURSE/all?page=1&total=0&lti_scid=${encodeURIComponent(scid)}`;
     const get = async () => {
@@ -95,6 +101,7 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
           "X-Requested-With": "XMLHttpRequest",
           ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
           ...(zoomCsrf ? { "ZOOM-CSRFTOKEN": zoomCsrf } : {}),
+          ...ajaxHeaders,
         },
       });
       try {
@@ -127,7 +134,7 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
     const inline = [...page.html.matchAll(/<script(?![^>]*src)[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1].length).join(",");
     result.unrecognised =
       `Zoom error ${String(err.errorCode ?? err.code ?? "?")}: ${String(err.errorMessage ?? "").slice(0, 200)} ` +
-      `(cookies: ${names || "none"}; csrf token: ${zoomCsrf ? "found" : "none"}; page keys: ${confKeys || "-"}; meta: ${metas || "-"}; inline scripts: ${inline || "-"})`;
+      `(cookies: ${names || "none"}; csrf token: ${zoomCsrf ? "found" : "none"}; app headers: ${Object.keys(ajaxHeaders).join(",") || "none"}; page keys: ${confKeys || "-"}; meta: ${metas || "-"}; inline scripts: ${inline || "-"})`;
     return result;
   }
   if (!upcoming.items) {

@@ -282,14 +282,15 @@ export function startMockReichman(
       if (body.get("id_token") !== "jwt-22") return send(400, "bad token");
       return send(
         200,
-        `<html><head><title>Rich LTI</title></head><body><div id="app"></div><script>window.appConf = {"page":{"scid":"scid-123","enablePersonalMeetingId":false}};</script>
+        `<html><head><title>Rich LTI</title></head><body><div id="app"></div><script>window.appConf = {page: {scid: "scid-123", enablePersonalMeetingId: false}, ajaxHeaders: [{key: "X-XSRF-TOKEN", value: "page-token-9"}]};</script>
         <script src="https://vaapplicationscontent.zoom.us/edu/lti/static/x/lti/scripts/main.js"></script></body></html>`,
-        { "Set-Cookie": ["XSRF-TOKEN=xsrf%2Fabc; Path=/", "zm_lti=s1; Path=/; HttpOnly"] },
+        { "Set-Cookie": ["zm_lti=s1; Path=/; HttpOnly"] },
       );
     }
     if (url.pathname.startsWith("/api/v1/lti/rich/meeting/")) {
-      if (url.searchParams.get("lti_scid") !== "scid-123" || req.headers["x-xsrf-token"] !== "xsrf/abc" || jar.zm_lti !== "s1") {
-        return send(401, JSON.stringify({ status: false, errorCode: 401 }), { "Content-Type": "application/json" });
+      if (url.searchParams.get("lti_scid") !== "scid-123" || req.headers["x-xsrf-token"] !== "page-token-9" || jar.zm_lti !== "s1") {
+        // Like the real one (2026-10-19): a missing token is a 200 with errorCode "csrf".
+        return send(200, JSON.stringify({ status: false, code: 0, errorCode: "csrf", errorMessage: "Sorry, your request is invalid." }), { "Content-Type": "application/json" });
       }
       const upcoming = url.pathname.includes("/upComing/");
       return send(
