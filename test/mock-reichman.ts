@@ -81,9 +81,12 @@ export function receivedPasswords() {
 export function startMockReichman(
   port = 0,
   options: { requireMfa?: boolean; wrongPasswordShowsForm?: boolean } = {},
-): Promise<{ server: Server; base: string }> {
+): Promise<{ server: Server; base: string; expireWebSessions: () => void }> {
   const sessions = new Set<string>(); // moodle sessions
   const idpSessions = new Set<string>();
+  // Gateway sessions that have expired. Like the real one (seen live 2026-10-19), an expired
+  // gateway session answers "access not found" instead of showing the login page again.
+  const staleIdp = new Set<string>();
   // My RUNI gateway sessions. Like the real one (seen live 2026-10-19), a session is tied to the
   // service it was opened for; reusing it for another service gets "access not found".
   const gateway = new Map<string, "yedion" | "panopto">();
@@ -308,6 +311,7 @@ export function startMockReichman(
 
     // ---------- Identity provider (F5-like) ----------
     if (url.pathname === "/idp/sso") {
+      if (jar.MRHSession && staleIdp.has(jar.MRHSession)) return send(404, ACCESS_NOT_FOUND);
       if (jar.MRHSession && idpSessions.has(jar.MRHSession)) {
         return send(200, `<html><body onload="document.forms[0].submit()">
           <form method="post" action="${base}/moodle/auth/saml2/sp/saml2-acs.php">
@@ -560,7 +564,16 @@ export function startMockReichman(
     server.listen(port, "127.0.0.1", () => {
       const address = server.address();
       const actualPort = typeof address === "object" && address ? address.port : port;
-      resolve({ server, base: `http://127.0.0.1:${actualPort}` });
+      resolve({
+        server,
+        base: `http://127.0.0.1:${actualPort}`,
+        // Moodle forgets its web sessions and the gateway's sessions expire (the app token stays valid).
+        expireWebSessions: () => {
+          sessions.clear();
+          for (const sid of idpSessions) staleIdp.add(sid);
+          idpSessions.clear();
+        },
+      });
     }),
   );
 }

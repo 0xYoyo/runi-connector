@@ -124,10 +124,21 @@ async function saveCourseFile(folder: string | undefined, courseName: string, fi
     mkdirSync(target, { recursive: true });
     // A shortcut (symlink) inside the home folder mustn't lead outside it.
     if (!inside(realpathSync(target), realpathSync(home))) throw new Error(`can only save inside your home folder (${home})`);
-    const path = join(target, clean(filename));
-    if (existsSync(path) && statSync(path).size === bytes.byteLength) return null;
-    writeFileSync(path, Buffer.from(bytes));
-    return path;
+    // Never overwrite: the student's copy may have their notes in it. A file that changed on
+    // Moodle is saved next to it as "name (updated).ext" (then "(updated 2)", …).
+    const name = clean(filename);
+    const dot = name.lastIndexOf(".");
+    const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+    const candidates = [name, `${stem} (updated)${ext}`, ...Array.from({ length: 20 }, (_, i) => `${stem} (updated ${i + 2})${ext}`)];
+    for (const candidate of candidates) {
+      const path = join(target, candidate);
+      if (!existsSync(path)) {
+        writeFileSync(path, Buffer.from(bytes), { flag: "wx" });
+        return path;
+      }
+      if (statSync(path).size === bytes.byteLength) return null; // already have this version
+    }
+    return null;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "EPERM" || code === "EACCES") {
@@ -260,26 +271,48 @@ async function main(input?: import("node:stream").Readable) {
   }
   const ltiLaunchUrls = async (name: RegExp) => (await ltiActivities(name)).map((a) => a.launchUrl);
 
+  // Runs something with the Moodle web session. When that session has expired, Moodle sends the
+  // browser back through the My RUNI gateway, which answers "access not found" for the old,
+  // expired gateway session instead of showing its login page (seen live 2026-10-19). Then sign
+  // in from scratch (new browser, new sessions) and try once more.
+  // The gateway's dead-end page (also seen as the final page of a stale session).
+  const isGatewayError = (html: string) => /<title>[^<]*access not found/i.test(html);
+  const STALE_GATEWAY = /access not found|F5Networks-SSO-Req|showed its login page again/i;
+  async function withMoodleWeb<T>(run: (props: UserProps) => Promise<T>): Promise<T> {
+    const props = await ensureReichman();
+    try {
+      return await withSignInLock(() => run(props));
+    } catch (error) {
+      if (!(error instanceof LoginError) || error.code !== "unexpected_page" || !STALE_GATEWAY.test(error.message)) throw error;
+      log("Moodle web session expired; signing in again");
+      const fresh = await connectReichman();
+      return withSignInLock(() => run(fresh));
+    }
+  }
+
   // Opens a Moodle page with the signed-in web session (signing in again if Moodle forgot it).
   async function openMoodlePage(url: string) {
     const props = await ensureReichman();
     const moodleOrigin = new URL(props.moodleBase).origin;
     if (new URL(url).origin !== moodleOrigin) throw new Error("Only Reichman Moodle pages can be opened.");
-    return withSignInLock(() =>
+    return withMoodleWeb(() =>
       navigateThroughLogin(needBrowser(), url, reichmanCreds() ?? { username: "", password: "" }, (page) => {
         const here = new URL(page.url);
-        return here.origin === moodleOrigin && !/\/login\/index\.php|\/auth\/saml2\//.test(here.pathname);
+        return (
+          page.url.startsWith((ref.session?.props.moodleBase ?? props.moodleBase) + "/") &&
+          !/\/login\/index\.php|\/auth\/saml2\//.test(here.pathname) &&
+          !isGatewayError(page.text())
+        );
       }),
     );
   }
   // Opens an external-tool activity (Zoom, Panopto…) the way clicking it in Moodle does: Moodle
   // posts a signed hand-off form to the tool, which may answer with more hand-off forms.
   async function launchLti(cmid: number) {
-    const props = await ensureReichman();
-    const page = await withSignInLock(() =>
+    const page = await withMoodleWeb((props) =>
       navigateThroughLogin(needBrowser(), `${props.moodleBase}/mod/lti/launch.php?id=${cmid}`, reichmanCreds() ?? { username: "", password: "" },
         // Done once we've left Moodle and the tool shows a page that isn't another hand-off.
-        (p) => !p.url.startsWith(props.moodleBase + "/") && !isHandOffPage(p.text()),
+        (p) => !p.url.startsWith((ref.session?.props.moodleBase ?? "") + "/") && !isHandOffPage(p.text()) && !isGatewayError(p.text()),
       ),
     );
     return { url: page.url, html: page.text() };
@@ -308,7 +341,8 @@ async function main(input?: import("node:stream").Readable) {
               // Same as clicking a course's "Panopto" activity in Moodle.
               instance: "Moodle Panopto activity",
               browser: needBrowser,
-              before: async () => void (await ensureReichman()),
+              // fresh: the Moodle web session expired (see withMoodleWeb); sign in from scratch.
+              before: async (fresh) => void (await (fresh ? connectReichman() : ensureReichman())),
               launchUrls: () => ltiLaunchUrls(/panopto/i),
             },
             {

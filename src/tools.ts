@@ -381,7 +381,7 @@ export function buildServer(
       {
         title: "Save course files to the computer",
         description:
-          "Downloads a course's files from Moodle (lecture slides, recitations, PDFs, Word/PowerPoint files) and saves the originals into a folder on the student's computer. Give the course, and optionally which files (parts of their names, or URLs from get_course_contents) and the folder. Without `files`, saves every file in the course (or in the matching section). Files already saved are skipped.",
+          "Downloads a course's files from Moodle (lecture slides, recitations, PDFs, Word/PowerPoint files) and saves the originals into a folder on the student's computer. Give the course, and optionally which files (parts of their names, or URLs from get_course_contents) and the folder. Without `files`, saves every file in the course (or in the matching section). Files already saved are skipped; a file that changed on Moodle is saved next to yours as 'name (updated).ext', never over it.",
         inputSchema: {
           course: z.string().describe("Course name, number or Moodle id"),
           files: z.array(z.string()).optional().describe("Parts of file names, or file URLs; omit for all files"),
@@ -398,7 +398,8 @@ export function buildServer(
         const sections = await contents(found.id);
         const pool = sections
           .filter((s) => !section || (s.name ?? "").toLowerCase().includes(section.toLowerCase()))
-          .flatMap((s) => s.modules.flatMap((m) => (m.contents ?? []).filter((c) => c.type === "file")));
+          // Moodle "page" activities show up as an index.html file: that's a web page, not material.
+          .flatMap((s) => s.modules.filter((m) => m.modname !== "page").flatMap((m) => (m.contents ?? []).filter((c) => c.type === "file")));
         const wanted = files?.length
           ? pool.filter((c) => files.some((f) => c.fileurl === f || c.filename.toLowerCase().includes(f.toLowerCase())))
           : pool;

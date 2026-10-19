@@ -91,6 +91,18 @@ export class PanoptoClient {
         errors.push(`${route.instance}: ${error.message}`);
       }
     }
+    // An expired Moodle web session ends at the gateway's "access not found": sign in to Moodle
+    // from scratch once and launch again (seen live 2026-10-19).
+    const first = this.routes[0];
+    if (first?.before && /access not found|F5Networks-SSO-Req/i.test(errors.join(" "))) {
+      await first.before(true);
+      const browser = first.browser();
+      if (first.launchUrls) await this.launchAll(browser, await first.launchUrls());
+      else await this.walkLogin(browser, first.instance);
+      this.active = browser;
+      this.authed = true;
+      return;
+    }
     throw new LoginError("unexpected_page", `Couldn't sign in to Panopto (${errors.join(" | ")})`);
   }
 

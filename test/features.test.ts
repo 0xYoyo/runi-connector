@@ -13,7 +13,7 @@ import { ltiLaunches, startMockReichman, VALID_USER, writes } from "./mock-reich
 const BUNDLE = join(process.cwd(), "dist", "extension", "server", "index.js");
 const run = existsSync(BUNDLE) ? describe : describe.skip;
 
-let mock: { server: Server; base: string };
+let mock: { server: Server; base: string; expireWebSessions: () => void };
 let client: Client;
 let home: string;
 const text = (r: any) => r.content.map((c: any) => c.text).join("\n");
@@ -89,6 +89,27 @@ run("more of Moodle", () => {
   it("reads Moodle pages only on Moodle", async () => {
     expect(await call("read_moodle_page", { url: `${mock.base}/moodle/mod/attendance/view.php?id=23` })).toContain("Present");
     expect(await call("read_moodle_page", { url: "https://example.com/x" })).toMatch(/Only links on Reichman's Moodle/);
+  });
+
+  it("an expired Moodle web session signs in again instead of failing (seen live 2026-10-19)", async () => {
+    expect(await call("get_attendance", { course: "77" })).toContain("Present");
+    mock.expireWebSessions();
+    const again = await call("get_attendance", { course: "77" });
+    expect(again).toContain("Present");
+    expect(again).not.toMatch(/access not found/);
+  });
+
+  it("never overwrites a file the student already has; skips Moodle page index.html", async () => {
+    const dir = join(home, "Desktop", "Sem", "Algo");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "rec1.pdf"), "my annotated copy");
+    const out = await call("download_course_files", { course: "77", folder: "~/Desktop/Sem/Algo" });
+    const { readFileSync, existsSync: exists } = await import("node:fs");
+    expect(readFileSync(join(dir, "rec1.pdf"), "utf8")).toBe("my annotated copy");
+    expect(exists(join(dir, "rec1 (updated).pdf"))).toBe(true);
+    expect(out).not.toContain("index.html");
+    const again = await call("download_course_files", { course: "77", folder: "~/Desktop/Sem/Algo" });
+    expect(again).not.toContain("rec1 (updated 2).pdf");
   });
 
   it("Zoom links from the course page and the Zoom activity", async () => {
