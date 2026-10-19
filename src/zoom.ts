@@ -70,6 +70,7 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
       referer: page.url,
       headers: {
         Accept: "application/json, text/plain, */*",
+        "X-Requested-With": "XMLHttpRequest",
         ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
       },
     });
@@ -89,6 +90,12 @@ export async function zoomMeetings(browser: Browser, page: { url: string; html: 
     upcoming: (upcoming.items ?? []).map(toMeeting),
     previous: (previous.items ?? []).slice(0, 5).map(toMeeting),
   };
+  const err = upcoming.data as { status?: unknown; errorCode?: unknown; errorMessage?: unknown; code?: unknown } | null;
+  if (err && err.status === false) {
+    // Zoom said no: report its own error code and message (no session data).
+    result.unrecognised = `Zoom error ${String(err.errorCode ?? err.code ?? "?")}: ${String(err.errorMessage ?? "").slice(0, 200)}`;
+    return result;
+  }
   if (!upcoming.items) {
     // Unknown shape: report the keys (never values) so the parser can be fixed.
     const keys = (v: unknown, d = 0): string =>
