@@ -11,7 +11,7 @@
 
 import { parse, type HTMLElement } from "node-html-parser";
 import { parseForms, type Browser, type Page } from "./browser";
-import { navigateThroughLogin, type Credentials } from "./reichman-login";
+import { LoginError, navigateThroughLogin, type Credentials } from "./reichman-login";
 
 export const MICHLOL_HOST = "https://yedion.runi.ac.il";
 
@@ -121,13 +121,23 @@ export class MichlolClient {
     const creds = this.credentials?.();
     if (!creds) throw new Error("Not connected to Reichman.");
     const michlolHost = new URL(this.host).host;
-    await navigateThroughLogin(this.browser, `${this.host}/yedion/login.aspx?Type=S`, creds, (page) => {
-      const url = new URL(page.url);
-      if (url.host !== michlolHost) return false;
-      const html = page.text();
-      if (parseForms(html, page.url).some((f) => f.inputs.some((i) => i.type === "password"))) return false;
-      return /fireflyweb/i.test(url.pathname) || /fireflyweb\.aspx/i.test(html);
-    });
+    const walk = () =>
+      navigateThroughLogin(this.browser, `${this.host}/yedion/login.aspx?Type=S`, creds, (page) => {
+        const url = new URL(page.url);
+        if (url.host !== michlolHost) return false;
+        const html = page.text();
+        if (parseForms(html, page.url).some((f) => f.inputs.some((i) => i.type === "password"))) return false;
+        return /fireflyweb/i.test(url.pathname) || /fireflyweb\.aspx/i.test(html);
+      });
+    try {
+      await walk();
+    } catch (error) {
+      // "access not found" from My RUNI's gateway: the session is tied to another service.
+      // Start a brand-new session and try once more.
+      if (!(error instanceof LoginError) || error.code !== "unexpected_page") throw error;
+      this.browser.jar.clear();
+      await walk();
+    }
     this.authed = true;
   }
 
@@ -139,6 +149,7 @@ export class MichlolClient {
     } catch (error) {
       if (!(error instanceof MichlolSessionLost)) throw error;
       this.authed = false;
+      this.browser.jar.clear(); // a fresh session, not the one that just ended
       await this.ensureAuth();
       return action();
     }

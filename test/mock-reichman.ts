@@ -63,6 +63,8 @@ const DENIED_PAGE = `<!doctype html><html><head><title>Reichman University - Log
 <p>אוניברסיטת רייכמן - התחברות</p><p>אחד או יותר מפרטי ההזדהות שמסרת שגויים.</p>
 <p>כדי להתחיל פעילות מחדש, בבקשה לחץ כאן להמשך</p><a href="/">לחץ כאן להמשך</a></body></html>`;
 
+const ACCESS_NOT_FOUND = `<html><head><title>IDC-Herzliya - access not found</title></head><body><p>לצערנו משהו השתבש...</p><a href="/">לחצו כאן להתחברות מחדש</a></body></html>`;
+
 // The page My RUNI shows when a session is gone (seen live).
 const LOGGED_OUT_PAGE = `<!doctype html><html><head><title>Reichman University</title></head><body>
 <p>בוצעה התנתקות</p><a href="/">לחץ כאן להמשך</a></body></html>`;
@@ -78,7 +80,9 @@ export function startMockReichman(
 ): Promise<{ server: Server; base: string }> {
   const sessions = new Set<string>(); // moodle sessions
   const idpSessions = new Set<string>();
-  const yedionGateway = new Set<string>(); // My RUNI gateway sessions for the Student Info Station
+  // My RUNI gateway sessions. Like the real one (seen live 2026-10-19), a session is tied to the
+  // service it was opened for; reusing it for another service gets "access not found".
+  const gateway = new Map<string, "yedion" | "panopto">();
   const yedionSessions = new Set<string>();
   const panoptoSessions = new Set<string>();
   const piazzaSessions = new Map<string, string>(); // session -> csrf
@@ -221,9 +225,9 @@ export function startMockReichman(
       return redirect("/gw/F5Networks-SSO-Req?app=panopto");
     }
     if (url.pathname === "/gw/F5Networks-SSO-Req") {
-      if (url.searchParams.get("app") !== "panopto" || !yedionGateway.has(jar.YGateway ?? "")) {
-        return send(200, `<html><head><title>IDC-Herzliya - access not found</title></head><body><p>לצערנו משהו השתבש...</p><a href="/">לחצו כאן להתחברות מחדש</a></body></html>`);
-      }
+      const bound = gateway.get(jar.GW ?? "");
+      if (url.searchParams.get("app") === "panopto" && !bound) return redirect("/gw/my.policy?res=panopto");
+      if (url.searchParams.get("app") !== "panopto" || bound !== "panopto") return send(404, ACCESS_NOT_FOUND);
       return send(200, `<html><body onload="document.forms[0].submit()">
         <form method="post" action="${base}/Panopto/Pages/Auth/Login.aspx"><input type="hidden" name="SAMLResponse" value="panopto-ok"><input type="hidden" name="RelayState" value="r"></form></body></html>`);
     }
@@ -278,19 +282,25 @@ export function startMockReichman(
     // ---------- Student Info Station (Michlol) ----------
     // Its own gateway login, separate from Moodle's (seen live: yedion -> my.runi.ac.il/my.policy).
     if (url.pathname === "/yedion/login.aspx") {
-      if (!yedionGateway.has(jar.YGateway ?? "")) return redirect("/gw/my.policy");
+      const bound = gateway.get(jar.GW ?? "");
+      if (!bound) return redirect("/gw/my.policy?res=yedion");
+      if (bound !== "yedion") return redirect("/gw/F5Networks-SSO-Req?app=yedion"); // → access not found
       const sid = crypto.randomUUID();
       yedionSessions.add(sid);
       return redirect("/yedion/fireflyweb.aspx", { "Set-Cookie": `YSession=${sid}; Path=/yedion` });
     }
-    if (url.pathname === "/gw/my.policy" && req.method === "GET") return send(200, loginForm().replace("/idp/my.policy", "/gw/my.policy"));
+    if (url.pathname === "/gw/my.policy" && req.method === "GET") {
+      return send(200, loginForm().replace("/idp/my.policy", `/gw/my.policy?res=${url.searchParams.get("res") ?? "yedion"}`));
+    }
     if (url.pathname === "/gw/my.policy" && req.method === "POST") {
       const body = await readBody(req);
       passwordAttempts.push(body.get("password") ?? "");
       if (body.get("username") !== VALID_USER.username || body.get("password") !== VALID_USER.password) return send(200, DENIED_PAGE);
       const sid = crypto.randomUUID();
-      yedionGateway.add(sid);
-      return redirect("/yedion/login.aspx?Type=S", { "Set-Cookie": `YGateway=${sid}; Path=/` });
+      const res = url.searchParams.get("res") === "panopto" ? "panopto" : "yedion";
+      gateway.set(sid, res);
+      const next = res === "panopto" ? "/gw/F5Networks-SSO-Req?app=panopto" : "/yedion/login.aspx?Type=S";
+      return redirect(next, { "Set-Cookie": `GW=${sid}; Path=/` });
     }
     if (url.pathname === "/yedion/fireflyweb.aspx" && req.method === "GET") {
       return send(200, `<html><body><a href="fireflyweb.aspx?prgname=Menu">menu</a></body></html>`);

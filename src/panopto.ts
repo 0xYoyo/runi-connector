@@ -40,8 +40,6 @@ export class PanoptoClient {
     private readonly moodleYear: number,
     private readonly host: string = PANOPTO_HOST,
     private readonly credentials?: () => Credentials | undefined,
-    // Signs in to the My RUNI gateway; used if Panopto's sign-in hits "access not found" first.
-    private readonly gatewaySignIn?: () => Promise<void>,
   ) {}
 
   // Panopto signs in through the My RUNI gateway (SAML): its login page redirects there, and the
@@ -53,8 +51,11 @@ export class PanoptoClient {
     try {
       await this.walkLogin();
     } catch (error) {
-      if (!(error instanceof LoginError) || error.code !== "unexpected_page" || !this.gatewaySignIn) throw error;
-      await this.gatewaySignIn();
+      // My RUNI's gateway can answer "access not found" to a session it tied to another service.
+      // Start a brand-new session and try once more (the password is still sent at most once
+      // per attempt, and only to Reichman's login page).
+      if (!(error instanceof LoginError) || error.code !== "unexpected_page") throw error;
+      this.browser.jar.clear();
       await this.walkLogin();
     }
     this.authed = true;

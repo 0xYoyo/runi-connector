@@ -34,7 +34,8 @@ interface CourseSection {
   modules: CourseModule[];
 }
 
-const INSTRUCTIONS = `Tools for a Reichman University student's own courses (Moodle and syllabi).
+const INSTRUCTIONS = `Tools for a Reichman University student's own data: Moodle (courses, files, deadlines, assignments, announcements, Moodle grades), syllabi, the Student Info Station (official grades, weekly class timetable / מערכת שעות, exam schedule), Panopto lecture recordings and transcripts, and Piazza.
+- If a tool fails with a sign-in or connection error, say so and suggest trying again; don't tell the user the data isn't available.
 - Course arguments accept a course name (Hebrew or English), a course number like "77", or a Moodle id.
 - Syllabi include grading formulas, AI policies, attendance rules and reading lists.
 - AI policies differ per course (some ban AI on graded work entirely). Before helping with an assignment, check that course's syllabus AI policy and respect it; explaining material and exam prep are always fine.
@@ -587,7 +588,8 @@ export function buildServer(
       "get_weekly_schedule",
       {
         title: "Weekly class schedule (Student Info Station)",
-        description: "Your weekly timetable by day: course, lecture/recitation, lecturer, room and hours. Defaults to the current semester.",
+        description:
+          "The student's class schedule / timetable (מערכת שעות) from the Student Info Station: every lecture and recitation by weekday, with lecturer, room and hours. Use for 'when are my classes', 'what do I have today/tomorrow', 'where is my lecture'. Defaults to the current semester.",
         inputSchema: {
           year: yearArg.describe("Academic year like 2027; default: current"),
           semester: z.number().int().min(0).max(9).optional().describe("1/2/3; default: current"),

@@ -17,6 +17,11 @@ interface StoredCookie {
 export class CookieJar {
   private cookies: StoredCookie[] = [];
 
+  /** Forgets every cookie (start a brand-new session). */
+  clear() {
+    this.cookies = [];
+  }
+
   store(url: URL, setCookieHeaders: string[]) {
     for (const header of setCookieHeaders) {
       const parts = header.split(";").map((p) => p.trim());

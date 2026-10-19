@@ -122,18 +122,23 @@ describe("Student Info Station", () => {
 });
 
 describe("Panopto", () => {
-  it("signs in via IDCPROD (warming up the My RUNI gateway on 'access not found') and finds recordings", async () => {
-    const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
-    const michlol = new MichlolClient(browser, base, () => VALID_USER);
-    const panopto = new PanoptoClient(browser, 2027, base, () => VALID_USER, () => michlol.ensureSignedIn());
+  it("signs in via IDCPROD with its own session and finds recordings", async () => {
+    const panopto = new PanoptoClient(new Browser(), 2027, base, () => VALID_USER);
     const results = await panopto.search("probability");
     expect(results[0]?.deliveryId).toBe("rec-5");
   });
 
-  it("without the gateway fallback, a dead end is a clear error, not a hang", async () => {
-    const { browser } = await signInToMoodle(`${base}/moodle`, VALID_USER);
-    const panopto = new PanoptoClient(browser, 2027, base, () => VALID_USER);
-    await expect(panopto.search("x")).rejects.toThrow(/unexpected page|circles/);
+  it("a session tied to another service ('access not found') is replaced by a fresh one", async () => {
+    // Reproduces 2026-10-19: one shared browser used for the Student Info Station, then Panopto.
+    const shared = new Browser();
+    const michlol = new MichlolClient(shared, base, () => VALID_USER);
+    await michlol.grades();
+    const panopto = new PanoptoClient(shared, 2027, base, () => VALID_USER);
+    const results = await panopto.search("probability");
+    expect(results[0]?.deliveryId).toBe("rec-5");
+    // …and back again: the Student Info Station recovers too.
+    const michlol2 = new MichlolClient(shared, base, () => VALID_USER);
+    expect((await michlol2.grades()).data.length).toBeGreaterThan(0);
   });
 });
 

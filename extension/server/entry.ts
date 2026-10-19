@@ -201,32 +201,30 @@ async function main() {
     return creds.reichmanRejected ? undefined : creds.reichman;
   };
 
-  // One Panopto / Michlol client per signed-in session, so each signs in once, not per call.
-  const clients = new WeakMap<Browser, { panopto: PanoptoClient; michlol: MichlolClient }>();
-  const clientsFor = async () => {
-    await ensureReichman();
-    const browser = needBrowser();
-    let c = clients.get(browser);
-    if (!c) {
-      const michlolClient = new MichlolClient(browser, michlolHost, reichmanCreds);
-      c = {
-        panopto: new PanoptoClient(browser, moodleYear(), panoptoHost, reichmanCreds, () => michlolClient.ensureSignedIn()),
-        michlol: michlolClient,
-      };
-      clients.set(browser, c);
-    }
-    return c;
-  };
+  // Panopto and the Student Info Station each get their OWN browser session. My RUNI's gateway
+  // ties a session to the service it was opened for and answers "access not found" if that
+  // session is reused for another one (seen live), so they never share cookies with each other
+  // or with Moodle. Each signs in once and is reused; they don't need the Moodle sign-in.
+  let gatewayClients: { panopto: PanoptoClient; michlol: MichlolClient } | null = null;
+  const resetGatewayClients = () => (gatewayClients = null);
+  const clientsFor = () =>
+    (gatewayClients ??= {
+      panopto: new PanoptoClient(new Browser(), moodleYear(), panoptoHost, reichmanCreds),
+      michlol: new MichlolClient(new Browser(), michlolHost, reichmanCreds),
+    });
 
   // Panopto and Michlol sign in through the My RUNI gateway with the saved login; if that says
   // the password is wrong, handle it like a failed Reichman sign-in.
   async function viaGateway<T>(run: (c: { panopto: PanoptoClient; michlol: MichlolClient }) => Promise<T>): Promise<T> {
-    const c = await clientsFor();
-    const tried = reichmanCreds();
+    const saved = loadCredentials();
+    if (!saved.reichman) throw needSignIn("No Reichman account is connected yet.");
+    if (saved.reichmanRejected) throw needSignIn(REICHMAN_REJECTED, 6 * 3600_000);
+    const c = clientsFor();
+    const tried = saved.reichman;
     try {
       return await withSignInLock(() => run(c));
     } catch (error) {
-      if (error instanceof LoginError && tried) throw reichmanFailure(error, tried);
+      if (error instanceof LoginError) throw reichmanFailure(error, tried);
       throw error;
     }
   }
@@ -326,6 +324,7 @@ async function main() {
     },
     onChange: () => {
       piazzaClient = undefined; // force re-login with new creds next time
+      resetGatewayClients();
     },
   });
   await setup.start();
@@ -381,6 +380,7 @@ async function main() {
       rotateSetupKey(); // old sign-in links stop working
       ref.session = null;
       piazzaClient = undefined;
+      resetGatewayClients();
       return { content: [{ type: "text" as const, text: "Deleted your saved logins and cached course data. Use connect_account to sign in again." }] };
     },
   );
