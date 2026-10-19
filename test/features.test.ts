@@ -43,6 +43,7 @@ beforeAll(async () => {
         PANOPTO_HOST: mock.base,
         MICHLOL_HOST: mock.base,
         PIAZZA_HOST: mock.base,
+        DRIVE_HOST: mock.base,
       } as Record<string, string>,
     }),
   );
@@ -108,6 +109,9 @@ run("more of Moodle", () => {
     expect(readFileSync(join(dir, "rec1.pdf"), "utf8")).toBe("my annotated copy");
     expect(exists(join(dir, "rec1 (updated).pdf"))).toBe(true);
     expect(out).not.toContain("index.html");
+    // Slides linked from the course page on Google Drive are saved too; private ones are reported.
+    expect(readFileSync(join(dir, "Lecture 1 - Boolean Logic.pdf")).subarray(0, 5).toString()).toBe("%PDF-");
+    expect(out).toMatch(/Private notes\.pdf: not shared publicly/);
     const again = await call("download_course_files", { course: "77", folder: "~/Desktop/Sem/Algo" });
     expect(again).not.toContain("rec1 (updated 2).pdf");
   });

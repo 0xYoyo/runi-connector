@@ -68,7 +68,8 @@ function mainRegion(html: string): string {
 
 /** The readable text of a Moodle page: its main region, with table rows kept on one line each. */
 export function moodlePageText(html: string): string {
-  const main = mainRegion(html);
+  // Moodle puts its accessibility menu inside the main region on some pages: drop it.
+  const main = mainRegion(html).replace(/<[^>]+(?:id|class)=["'][^"']*accessib[^"']*["'][\s\S]*$/i, "");
   return main
     .replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, "")
     .replace(/<footer[\s\S]*$/i, "")
@@ -89,6 +90,7 @@ export function moodlePageText(html: string): string {
     .replace(/&#0?39;/g, "'")
     .replace(/[ \t]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
+    .replace(/\n\s*Accessibility\s*\n\s*Reset All[\s\S]*$/, "")
     .trim();
 }
 

@@ -139,8 +139,21 @@ export interface BuildOptions {
   readLocalFile?: (path: string) => Promise<{ name: string; bytes: Uint8Array }>;
   /** Enables actions that change things (each needs a confirmed preview; local versions only). */
   actions?: PendingActions;
+  /** Downloads a publicly shared Google Drive file linked from a course page (local versions only). */
+  fetchPublicFile?: (url: string) => Promise<{ bytes: ArrayBuffer; filename?: string }>;
   /** If a newer version is available, a one-line notice appended to the server instructions. */
   updateNotice?: string;
+}
+
+/** Google Drive file links in some HTML, as downloadable "files" named after their link text. */
+export function driveLinks(html: string): Array<{ filename: string; fileurl: string; drive: true }> {
+  const out: Array<{ filename: string; fileurl: string; drive: true }> = [];
+  const re = /<a\b[^>]*href=["']([^"']*drive\.google\.com\/(?:open\?id=|file\/d\/|uc\?[^"']*id=)([\w-]{20,})[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    const label = htmlToText(m[3]).replace(/[\/\\:*?"<>|]/g, "-").trim() || `drive-${m[2]}`;
+    out.push({ filename: `${label}.pdf`, fileurl: `https://drive.google.com/file/d/${m[2]}`, drive: true });
+  }
+  return out;
 }
 
 function srtPlain(result: string): string {
@@ -403,7 +416,15 @@ export function buildServer(
         const wanted = files?.length
           ? pool.filter((c) => files.some((f) => c.fileurl === f || c.filename.toLowerCase().includes(f.toLowerCase())))
           : pool;
-        const unique = [...new Map(wanted.map((c) => [c.fileurl, c])).values()];
+        // Some courses link their slides on Google Drive from the section text instead of uploading
+        // them (Digital Systems, seen 2026-10-19). Those count as course files too.
+        const driveFiles = options.fetchPublicFile
+          ? sections
+              .filter((s) => !section || (s.name ?? "").toLowerCase().includes(section.toLowerCase()))
+              .flatMap((s) => driveLinks([s.summary, ...s.modules.map((m) => m.description ?? "")].join(" ")))
+              .filter((d) => !files?.length || files.some((f) => d.fileurl === f || d.filename.toLowerCase().includes(f.toLowerCase())))
+          : [];
+        const unique = [...new Map([...wanted, ...driveFiles].map((c) => [c.fileurl, c])).values()];
         if (unique.length === 0) return failure(`No matching files in ${found.fullname}. Use get_course_contents to see what's there.`);
         if (unique.length > 80) return failure(`That's ${unique.length} files. Narrow it down with \`files\` or \`section\` (max 80 at a time).`);
         const saved: string[] = [];
@@ -411,10 +432,12 @@ export function buildServer(
         const failed: string[] = [];
         for (const file of unique) {
           try {
-            const { bytes } = await requireMoodle().downloadFile(file.fileurl);
-            const path = await saveFile(folder, found.fullname, file.filename, bytes);
+            const fromDrive = "drive" in file;
+            const got = fromDrive ? await options.fetchPublicFile!(file.fileurl) : await requireMoodle().downloadFile(file.fileurl);
+            const name = fromDrive ? ((got as { filename?: string }).filename ?? file.filename) : file.filename;
+            const path = await saveFile(folder, found.fullname, name, got.bytes);
             if (path) saved.push(path);
-            else skipped.push(file.filename);
+            else skipped.push(name);
           } catch (error) {
             failed.push(`${file.filename}: ${(error as Error).message}`);
             if (/not allowed|permission|EPERM|EACCES/i.test((error as Error).message)) break; // same for the rest

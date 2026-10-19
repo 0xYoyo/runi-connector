@@ -150,6 +150,22 @@ async function saveCourseFile(folder: string | undefined, courseName: string, fi
   }
 }
 
+// Downloads a Google Drive file that a course page links to (only drive.google.com links, only
+// files shared publicly; Drive's own "sign in" or virus-scan pages are reported, not saved).
+async function fetchPublicFile(url: string): Promise<{ bytes: ArrayBuffer; filename?: string }> {
+  const id = url.match(/^https:\/\/drive\.google\.com\/file\/d\/([\w-]{20,})$/)?.[1];
+  if (!id) throw new Error("only Google Drive file links can be downloaded");
+  const base = testOverride("DRIVE_HOST") ?? "https://drive.usercontent.google.com";
+  const response = await fetch(`${base}/download?id=${id}&export=download&confirm=t`, { redirect: "follow" });
+  const type = response.headers.get("content-type") ?? "";
+  if (!response.ok || type.includes("text/html")) throw new Error("not shared publicly on Google Drive (open it in the browser)");
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : plain;
+  return { bytes: await response.arrayBuffer(), filename };
+}
+
 // Reads a file the student wants to submit. Only files inside the home folder, up to 100 MB.
 async function readLocalFile(path: string): Promise<{ name: string; bytes: Uint8Array }> {
   const home = homedir();
@@ -488,6 +504,7 @@ async function main(input?: import("node:stream").Readable) {
     piazza,
     srtToText,
     saveFile: saveCourseFile,
+    fetchPublicFile,
     readMoodlePage,
     readLocalFile,
     launchLti,

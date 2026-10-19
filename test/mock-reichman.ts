@@ -160,7 +160,7 @@ export function startMockReichman(
           {
             id: 1,
             name: "Lecture Notes",
-            summary: "<p>Slides for each week</p>",
+            summary: `<p>Slides for each week</p><p><a href="https://drive.google.com/open?id=1MY1buFHo_Wx5DPrKhCNSA2cm5ltwFJzMxx&amp;usp=drive_fs">Lecture 1 slides</a> and <a href="https://drive.google.com/open?id=1PRIVATEPRIVATEPRIVATExx">Private notes</a></p>`,
             modules: [
               {
                 id: 11,
@@ -228,6 +228,16 @@ export function startMockReichman(
       if (fn === "gradereport_user_get_grade_items")
         return json({ usergrades: [{ gradeitems: [{ itemname: "HW1", itemtype: "mod", gradeformatted: "95.00", rangeformatted: "0–100", percentageformatted: "95.00 %", feedback: "" }] }] });
       return json({ exception: "x", errorcode: "unknownfunction", message: `mock has no ${fn}` });
+    }
+    // Google Drive's direct download: public files come back as the file; private ones as a sign-in page.
+    if (url.pathname === "/download" && url.searchParams.get("export") === "download") {
+      if (url.searchParams.get("id") === "1MY1buFHo_Wx5DPrKhCNSA2cm5ltwFJzMxx") {
+        return send(200, minimalPdf("Lecture 1: Boolean logic"), {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `attachment; filename="lecture1.pdf"; filename*=UTF-8''${encodeURIComponent("Lecture 1 - Boolean Logic.pdf")}`,
+        });
+      }
+      return send(200, "<html><head><title>Google Drive - Sign in</title></head></html>");
     }
     if (url.pathname === "/moodle/webservice/upload.php" && req.method === "POST") {
       const raw = await readRaw(req);
