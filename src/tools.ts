@@ -258,6 +258,20 @@ export function buildServer(
     return sections;
   };
 
+  // A course's assignments, with their descriptions and attached files (instructions etc.).
+  interface AssignmentInfo {
+    id: number;
+    cmid: number;
+    name: string;
+    intro?: string;
+    introattachments?: Array<{ filename: string; fileurl: string; filesize?: number }>;
+  }
+  const assignmentsOf = (courseId: number) =>
+    requireMoodle()
+      .call<{ courses: Array<{ assignments: AssignmentInfo[] }> }>("mod_assign_get_assignments", { courseids: [courseId] })
+      .then((r) => r.courses[0]?.assignments ?? [])
+      .catch(() => [] as AssignmentInfo[]);
+
   server.registerTool(
     "list_courses",
     {
@@ -325,6 +339,7 @@ export function buildServer(
     safe(async ({ course }: { course: string }) => {
       const found = await resolveCourse(course);
       const sections = await contents(found.id);
+      const attachments = new Map((await assignmentsOf(found.id)).map((a) => [a.cmid, a.introattachments ?? []]));
       const out: string[] = [`${found.fullname}`];
       for (const section of sections) {
         out.push(`\n## ${section.name || "(untitled section)"}`);
@@ -336,6 +351,9 @@ export function buildServer(
           for (const file of mod.contents ?? []) {
             if (file.type !== "file") continue;
             out.push(`    • ${file.filename} — ${Math.round(file.filesize / 1024)} KB — ${file.fileurl}`);
+          }
+          for (const file of attachments.get(mod.id) ?? []) {
+            out.push(`    • ${file.filename} — ${Math.round((file.filesize ?? 0) / 1024)} KB — ${file.fileurl} (attached to the assignment)`);
           }
         }
       }
@@ -409,30 +427,45 @@ export function buildServer(
       safe(async ({ course, files, section, folder }: { course: string; files?: string[]; section?: string; folder?: string }) => {
         const found = await resolveCourse(course);
         const sections = await contents(found.id);
-        const pool = sections
-          .filter((s) => !section || (s.name ?? "").toLowerCase().includes(section.toLowerCase()))
-          // Moodle "page" activities show up as an index.html file: that's a web page, not material.
-          .flatMap((s) => s.modules.filter((m) => m.modname !== "page").flatMap((m) => (m.contents ?? []).filter((c) => c.type === "file")));
-        const wanted = files?.length
-          ? pool.filter((c) => files.some((f) => c.fileurl === f || c.filename.toLowerCase().includes(f.toLowerCase())))
-          : pool;
-        // Some courses link their slides on Google Drive from the section text instead of uploading
-        // them (Digital Systems, seen 2026-10-19). Those count as course files too.
-        // Assignment descriptions too (Digital Systems links each project's instructions there).
-        const assignmentIntros = options.fetchPublicFile && !section
-          ? await requireMoodle()
-              .call<{ courses: Array<{ assignments: Array<{ intro?: string }> }> }>("mod_assign_get_assignments", { courseids: [found.id] })
-              .then((r) => (r.courses[0]?.assignments ?? []).map((a) => a.intro ?? "").join(" "))
-              .catch(() => "")
-          : "";
-        const driveFiles = options.fetchPublicFile
-          ? sections
-              .filter((s) => !section || (s.name ?? "").toLowerCase().includes(section.toLowerCase()))
-              .flatMap((s) => driveLinks([s.summary, ...s.modules.map((m) => m.description ?? "")].join(" ")))
-              .concat(driveLinks(assignmentIntros))
-              .filter((d) => !files?.length || files.some((f) => d.fileurl === f || d.filename.toLowerCase().includes(f.toLowerCase())))
-          : [];
-        const unique = [...new Map([...wanted, ...driveFiles].map((c) => [c.fileurl, c])).values()];
+        // Everything downloadable in the course, each with the activity title it belongs to:
+        // module files, assignment attachments ("introattachments": not part of the course
+        // contents, seen 2026-10-24 in Finance), and Google Drive links in section text and
+        // assignment descriptions (Digital Systems). Moodle "page" activities are web pages: skipped.
+        const inSection = (name?: string) => !section || (name ?? "").toLowerCase().includes(section.toLowerCase());
+        const sectionOfModule = new Map<number, string>();
+        for (const s of sections) for (const m of s.modules) sectionOfModule.set(m.id, s.name ?? "");
+        type Item = { filename: string; fileurl: string; title: string; drive?: true };
+        const items: Item[] = [];
+        for (const s of sections.filter((x) => inSection(x.name))) {
+          for (const m of s.modules.filter((x) => x.modname !== "page")) {
+            for (const c of (m.contents ?? []).filter((x) => x.type === "file")) items.push({ filename: c.filename, fileurl: c.fileurl, title: m.name });
+          }
+          if (options.fetchPublicFile) {
+            for (const d of driveLinks(s.summary ?? "")) items.push({ ...d, title: s.name ?? "" });
+            for (const m of s.modules) for (const d of driveLinks(m.description ?? "")) items.push({ ...d, title: m.name });
+          }
+        }
+        for (const a of await assignmentsOf(found.id)) {
+          if (!inSection(sectionOfModule.get(a.cmid))) continue;
+          for (const f of a.introattachments ?? []) items.push({ filename: f.filename, fileurl: f.fileurl, title: a.name });
+          if (options.fetchPublicFile) for (const d of driveLinks(a.intro ?? "")) items.push({ ...d, title: a.name });
+        }
+        // The same file can appear with or without /webservice/ and ?forcedownload: compare without them.
+        const sameFile = (x: string, y: string) => {
+          const norm = (u: string) => u.replace("/webservice/pluginfile.php", "/pluginfile.php").split("?")[0];
+          return norm(x) === norm(y);
+        };
+        const matches = (item: Item, f: string) =>
+          sameFile(item.fileurl, f) || item.filename.toLowerCase().includes(f.toLowerCase()) || item.title.toLowerCase().includes(f.toLowerCase());
+        let wanted = files?.length ? items.filter((item) => files.some((f) => matches(item, f))) : items;
+        // A Moodle file link given directly is downloaded even if it isn't listed anywhere.
+        for (const f of files ?? []) {
+          if (!/^https?:\/\//.test(f) || wanted.some((w) => sameFile(w.fileurl, f))) continue;
+          const url = new URL(f);
+          if (url.origin !== new URL(requireMoodle().baseUrl).origin || !url.pathname.includes("/pluginfile.php/")) continue;
+          wanted = [...wanted, { filename: decodeURIComponent(url.pathname.split("/").pop() ?? "file"), fileurl: f, title: "" }];
+        }
+        const unique = [...new Map(wanted.map((c) => [c.fileurl.replace("/webservice/pluginfile.php", "/pluginfile.php").split("?")[0], c])).values()];
         if (unique.length === 0) return failure(`No matching files in ${found.fullname}. Use get_course_contents to see what's there.`);
         if (unique.length > 80) return failure(`That's ${unique.length} files. Narrow it down with \`files\` or \`section\` (max 80 at a time).`);
         const saved: string[] = [];

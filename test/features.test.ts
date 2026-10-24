@@ -92,6 +92,23 @@ run("more of Moodle", () => {
     expect(await call("read_moodle_page", { url: "https://example.com/x" })).toMatch(/Only links on Reichman's Moodle/);
   });
 
+  it("assignment attachments: listed, and downloadable by activity name, file name, exact URL or section (bug 2026-10-24)", async () => {
+    expect(await call("get_course_contents", { course: "77" })).toContain("Ex 1 PDF (10).pdf");
+    const url = `${mock.base}/moodle/pluginfile.php/138013/mod_assign/introattachment/0/Ex%201%20PDF%20%2810%29.pdf?forcedownload=1`;
+    const tries: Array<Record<string, unknown>> = [
+      { files: ["מטלה 1"] },
+      { files: ["Ex 1"] },
+      { files: [url] },
+      { files: [url.replace("/pluginfile.php", "/webservice/pluginfile.php")] },
+      { section: "מטלות הגשה" },
+    ];
+    for (const [i, extra] of tries.entries()) {
+      const out = await call("download_course_files", { course: "77", folder: `~/Desktop/att${i}`, ...extra });
+      expect(out, JSON.stringify(extra)).toContain("Ex 1 PDF (10).pdf");
+      expect(out).not.toMatch(/No matching files/);
+    }
+  });
+
   it("an expired Moodle web session signs in again instead of failing (seen live 2026-10-19)", async () => {
     expect(await call("get_attendance", { course: "77" })).toContain("Present");
     mock.expireWebSessions();
