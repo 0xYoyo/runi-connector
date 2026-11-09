@@ -39,3 +39,14 @@ scripts/hosted/test_probe.py: four unit tests pass (login detection, challenge p
 6. Test installed native flows on Claude + ChatGPT, including mobile, with two consenting accounts. Directory install distribution is a separate launch gate.
 
 Read HOSTED_CONNECTOR_RESEARCH.md for sources and architecture. User reports IT approved an interim approach. Existing no-evasion instructions should not be interpreted as a ban on investigating ordinary authorized cloud browser login; no stealth/proxy/challenge-bypass implementation has been added.
+
+## Resume test results — 2026-11-09
+
+- Browser UI verified Workers plans -> Free -> Current plan ($0). No upgrade performed.
+- Cloudflare real-browser API succeeded. Ordinary Moodle login yielded a 575–579-byte script-only page, including kramericaindustries.ac_v2.lib.js and rbz signals. Still present after a 10-second wait.
+- Exact admin/tool/mobile/launch.php route also returned challenge_signals after a 5-second wait, no password form or SSO signals. No university credentials submitted.
+- This disproves the assumption that adding a Cloudflare real browser alone fixes access. It does NOT prove all hosting networks fail.
+- Probe classifier now detects the actual script-only challenge; 5 Python regression tests pass.
+- Original baseline: 19 tests pass, 9 skipped.
+- Next candidate is an ordinary browser on a different hosted environment, with no stealth/bypass features. Render Free can be a bounded experiment but is explicitly not a production guarantee: sleeps after 15 minutes, shared 750 hours/month, ephemeral filesystem, bandwidth/build overage risks if a payment method exists. Verify account spending controls before provisioning. Source https://render.com/docs/free . Do not promise a flawless always-on service for zero hosting cost.
+- Product still NOT release-ready. Need actual hosted authenticated API success, account isolation and refresh tests, native integration verification, and a sustainable hosting decision before release.

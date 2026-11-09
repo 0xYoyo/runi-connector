@@ -20,7 +20,7 @@ def classify(html):
     """Signals, not proof of successful authentication or absence of blocking."""
     if not isinstance(html, str):
         return {'classification': 'unexpected_response'}
-    challenge = bool(re.search(r'checking your browser|verify you are human|access denied|captcha|rbzid|reblaze', html, re.I))
+    challenge = bool(re.search(r'checking your browser|verify you are human|access denied|captcha|rbz|reblaze|kramericaindustries', html, re.I))
     password = bool(re.search(r'<input\b[^>]*\btype\s*=\s*[\"\x27]?password', html, re.I))
     saml = bool(re.search(r'SAMLRequest|SAMLResponse|auth\.runi\.ac\.il|my\.runi\.ac\.il', html, re.I))
     return {'classification': 'challenge_signals' if challenge else 'login_signals' if password or saml else 'inconclusive',
