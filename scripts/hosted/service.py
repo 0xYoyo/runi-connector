@@ -15,7 +15,7 @@ def run_probe():
     results = []
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(headless=False)
             try:
                 for label, path in [('login', '/login/index.php'), ('mobile-launch', '/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=' + uuid.uuid4().hex + '&urlscheme=moodlemobile')]:
                     context = browser.new_context()
