@@ -50,3 +50,11 @@ Read HOSTED_CONNECTOR_RESEARCH.md for sources and architecture. User reports IT 
 - Original baseline: 19 tests pass, 9 skipped.
 - Next candidate is an ordinary browser on a different hosted environment, with no stealth/bypass features. Render Free can be a bounded experiment but is explicitly not a production guarantee: sleeps after 15 minutes, shared 750 hours/month, ephemeral filesystem, bandwidth/build overage risks if a payment method exists. Verify account spending controls before provisioning. Source https://render.com/docs/free . Do not promise a flawless always-on service for zero hosting cost.
 - Product still NOT release-ready. Need actual hosted authenticated API success, account isolation and refresh tests, native integration verification, and a sustainable hosting decision before release.
+
+## Render experiment provisioned
+
+- Render workspace Hobby, no card on file, $0 projected; free hours 210.63/750, bandwidth 1 MB/5 GB, build minutes 0/500 before test.
+- Created runi-hosted-probe, Free ($0), Frankfurt, Dockerfile scripts/hosted/Dockerfile, branch research/hosted-native-connectors, health /health, auto-deploy OFF, no secrets.
+- Service srv-dbp13aom7kps738i02eg. First deployment dep-dbp13b0m7kps738i03m0 of 8bd19b4 building at 20:32 Jerusalem.
+- Dashboard https://dashboard.render.com/web/srv-dbp13aom7kps738i02eg . Need observe build and sanitized result; do not confuse deployment success with Reichman access success.
+- Browser UI handle renderTab currently points to deployment page; account signed in. Source branch pushed to origin. No production connector service deployed.
