@@ -58,3 +58,13 @@ Read HOSTED_CONNECTOR_RESEARCH.md for sources and architecture. User reports IT 
 - Service srv-dbp13aom7kps738i02eg. First deployment dep-dbp13b0m7kps738i03m0 of 8bd19b4 building at 20:32 Jerusalem.
 - Dashboard https://dashboard.render.com/web/srv-dbp13aom7kps738i02eg . Need observe build and sanitized result; do not confuse deployment success with Reichman access success.
 - Browser UI handle renderTab currently points to deployment page; account signed in. Source branch pushed to origin. No production connector service deployed.
+
+## Bounded milestone completed 2026-11-10
+
+- Completed graphical Chromium test on Render. Initial xvfb-run wrapper stalled before port binding; canceled that deployment and fixed startup by launching Xvfb with a bounded wait in the background probe, independent of HTTP health server.
+- Commit d419aec deployed successfully. At 14:08:39 Jerusalem, both login and mobile-launch returned HTTP 247, challenge_signals, 563-byte HTML, no password form/SSO signals. Graphical Chromium did NOT resolve access.
+- Cloudflare REST endpoint test with deliberately INVALID token also returned challenge HTML (579 bytes), not Moodle JSON. First attempt was provider HTTP 401 because Wrangler OAuth expired; refreshed via whoami and retested successfully. Do not confuse the first 401 with university behavior.
+- No university credentials sent in any experiment. No paid services/plans enabled.
+- Render runi-hosted-probe SUSPENDED through dashboard; verified Suspended by you and Resume Web Service. No further probe startup or free instance-hour consumption until explicitly resumed.
+- User supplied competing product URL: https://instinct.com/ . Public page states it operates a phone/computer but does not establish its Reichman login method, network or permissions.
+- User wants economical usage. Stop repeated host guessing. Next meaningful work requires evidence of an allowed network/session path (e.g. details from the successful Instinct integration), or an IT allowlist/API route. Cannot claim a functioning hosted connector or ready-to-distribute product.
