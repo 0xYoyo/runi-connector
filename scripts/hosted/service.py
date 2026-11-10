@@ -2,6 +2,9 @@
 import json
 import os
 import threading
+import subprocess
+import time
+from pathlib import Path
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from probe import classify
@@ -13,7 +16,18 @@ lock = threading.Lock()
 def run_probe():
     from playwright.sync_api import sync_playwright
     results = []
+    display = None
     try:
+        os.environ['DISPLAY'] = ':99'
+        display = subprocess.Popen(['Xvfb', ':99', '-screen', '0', '1280x720x24', '-nolisten', 'tcp'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            if display.poll() is not None:
+                raise RuntimeError('display_start_failed')
+            if Path('/tmp/.X11-unix/X99').exists():
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError('display_start_timeout')
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=False)
             try:
@@ -34,6 +48,13 @@ def run_probe():
         status = 'complete'
     except Exception:
         status = 'browser_start_error'
+    finally:
+        if display is not None:
+            display.terminate()
+            try:
+                display.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                display.kill()
     with lock:
         report.update(status=status, results=results)
     print(json.dumps(report), flush=True)

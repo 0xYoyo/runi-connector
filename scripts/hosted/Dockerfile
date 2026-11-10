@@ -4,4 +4,4 @@ RUN pip install --no-cache-dir playwright==1.56.0
 COPY scripts/hosted/probe.py scripts/hosted/service.py ./
 USER pwuser
 EXPOSE 10000
-CMD ["xvfb-run", "-a", "python", "service.py"]
+CMD ["python", "service.py"]
