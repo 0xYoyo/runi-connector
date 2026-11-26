@@ -46,6 +46,10 @@ Then start a new Claude Code session (or check with `/mcp`).
 
 Both installs run the same npm package; the .mcpb is just the double-click wrapper Claude Desktop needs.
 
+## Optional macOS desktop widget
+
+On macOS 14 or later, add upcoming Moodle deadlines to your desktop through **Edit Widgets**. The medium widget can also show a relevant Piazza update when Piazza is connected. The widget is a separate, opt-in installation from source. [Build and install the macOS widget](macos-widget/README.md).
+
 ## What it can do
 
 Moodle: list courses, read the syllabus (grade formula, AI policy, attendance, reading list), browse course contents, read a PDF or slide, **save course files to a folder on your computer** (e.g. *"download this week's slides into Desktop/Year 2/Algorithms"*), upcoming deadlines, assignments, Moodle grades, announcements, search materials.
