@@ -1,0 +1,77 @@
+name: macOS widget and Windows compatibility
+on:
+  pull_request:
+    paths:
+      - 'macos-widget/**'
+      - '.github/workflows/macos-widget.yml'
+  push:
+    paths:
+      - 'macos-widget/**'
+      - '.github/workflows/macos-widget.yml'
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Test widget data and calendar logic
+        working-directory: macos-widget
+        run: |
+          python3 -m unittest discover -s tests
+          xcrun swiftc Shared.swift tests/main.swift -o "$RUNNER_TEMP/widget-calendar-test"
+          "$RUNNER_TEMP/widget-calendar-test"
+      - name: Build and verify native extension
+        run: python3 macos-widget/build.py
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Build the normal cross-platform npm package for the Windows smoke test
+        run: |
+          npm ci
+          npm run build:ext
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: connector-package
+          path: ${{ runner.temp }}/reichman-courses-connector-*.tgz
+          retention-days: 1
+
+  windows-install:
+    needs: package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: connector-package
+      - name: Install and uninstall the connector in an isolated Windows user configuration
+        shell: pwsh
+        run: |
+          $package = (Get-ChildItem reichman-courses-connector-*.tgz -ErrorAction Stop).FullName
+          $contents = tar -tzf $package
+          if ($LASTEXITCODE -ne 0 -or ($contents -match 'macos-widget|\.appex/|\.swift$')) { throw "Unexpected npm package contents" }
+          npm install --no-audit --no-fund --prefix "$env:RUNNER_TEMP/client" "$package"
+          if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+          $cli = "$env:RUNNER_TEMP/client/node_modules/.bin/reichman-courses-connector.cmd"
+          $env:CODEX_HOME = "$env:RUNNER_TEMP/test-codex"
+          $env:RUNI_DATA_DIR = "$env:RUNNER_TEMP/test-runi"
+          $env:RUNI_CLAUDE_BIN = "nonexistent-claude-for-smoke-test"
+          & $cli install
+          if ($LASTEXITCODE -ne 0) { throw "Connector setup failed" }
+          $config = "$env:CODEX_HOME/config.toml"
+          if (!(Select-String -Path $config -SimpleMatch '[mcp_servers.reichman]')) { throw "Missing MCP registration" }
+          if (!(Test-Path "$env:RUNI_DATA_DIR/app/runi-connector.js")) { throw "Missing installed server" }
+          & $cli uninstall
+          if ($LASTEXITCODE -ne 0 -or (Select-String -Path $config -SimpleMatch '[mcp_servers.reichman]')) { throw "Connector uninstall failed" }
